@@ -1,0 +1,12 @@
+[Unit]
+Description=Unlook OTA: consume the SDK deploy key seed from the boot partition
+RequiresMountsFor=/etc/unlook /boot/firmware
+After=unlook-firstboot.service
+ConditionPathExists=/boot/firmware/unlook/sdk-deploy-key
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/unlook-ota provision
+
+[Install]
+WantedBy=multi-user.target

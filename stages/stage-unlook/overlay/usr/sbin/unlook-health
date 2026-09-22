@@ -1,0 +1,106 @@
+#!/bin/sh
+# unlook-health -- is the scanner daemon up and answering?
+#
+#   unlook-health --boot          (unlook-health.service, every boot)
+#   unlook-health --wait [S]      (unlook-ota after an SDK update; no slot changes)
+#   unlook-health --once          (one probe, exit 0/1)
+#
+# Healthy = unlook-stream.service is `active` AND answers `ping` with `OK pong`
+# on the UCP port (profile command_port, default 5556) within the deadline
+# (HEALTH_TIMEOUT_S, default 120 s, monotonic clock).
+#
+# --boot additionally drives the A/B state machine (docs/OS.md §6):
+#   * tryboot of a new slot + healthy   -> `rauc status mark-good` = commit
+#   * tryboot of a new slot + unhealthy -> mark bad, reboot normally = rollback
+#   * normal boot with a tryboot still pending -> that tryboot never committed:
+#     mark it bad and record the rollback
+#   * normal boot + unhealthy           -> logged, unit fails; no slot change
+set -eu
+UOS_TAG=unlook-health
+# shellcheck source=../lib/unlook-os/common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+LIB="${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}"
+
+MODE="${1:---once}"
+TIMEOUT="$(uos_conf HEALTH_TIMEOUT_S 120 '[0-9]{2,3}')"
+if [ "$MODE" = --wait ] && [ -n "${2:-}" ]; then
+    case "$2" in *[!0-9]* | '') uos_die "--wait expects seconds" ;; esac
+    TIMEOUT="$2"
+fi
+
+PROFILE="$UOS_ROOT/etc/unlook/scanner_profile.yaml"
+PORT="$(sed -n 's/^command_port:[[:space:]]*\([0-9]\{1,5\}\)[[:space:]]*\(#.*\)\{0,1\}$/\1/p' "$PROFILE" 2>/dev/null | tail -n 1)"
+PORT="${PORT:-5556}"
+[ "$PORT" -le 65535 ] || PORT=5556
+
+uptime_s() { cut -d. -f1 /proc/uptime; }
+
+probe() {
+    systemctl is-active --quiet unlook-stream.service || return 1
+    if [ "$PORT" -eq 0 ]; then
+        return 0 # command port disabled in the profile: service state only
+    fi
+    timeout 8 "$LIB/ucp-ping" 127.0.0.1 "$PORT" 3 >/dev/null 2>&1
+}
+
+wait_healthy() {
+    _deadline=$(($(uptime_s) + TIMEOUT))
+    while :; do
+        if probe; then return 0; fi
+        [ "$(uptime_s)" -lt "$_deadline" ] || return 1
+        sleep 2
+    done
+}
+
+pending_version() { cat "$UOS_STATE/pending-version" 2>/dev/null || echo unknown; }
+
+case "$MODE" in
+    --once)
+        probe
+        ;;
+    --wait)
+        wait_healthy
+        ;;
+    --boot)
+        booted="$(uos_booted_slot)"
+        [ -n "$booted" ] || uos_die "no rauc.slot= on the kernel command line"
+        if uos_tryboot_active; then
+            uos_log notice "tryboot of slot $booted: verifying (deadline ${TIMEOUT}s)"
+            uos_status verifying os 90 "$(pending_version)" -
+            if wait_healthy; then
+                rauc status mark-good booted
+                uos_status committed os 100 "$(uos_release_get VERSION)" -
+                rm -f "$UOS_STATE/pending-version"
+                systemctl stop unlook-tryboot-guard.service 2>/dev/null || true
+                uos_log notice "slot $booted healthy and committed"
+                exit 0
+            fi
+            uos_log err "slot $booted NOT healthy within ${TIMEOUT}s: rolling back"
+            rauc status mark-bad booted || true
+            uos_status rolled_back os 0 "$(pending_version)" health_timeout
+            rm -f "$UOS_STATE/pending-version"
+            sync
+            systemctl reboot
+            exit 1
+        fi
+        # Normal boot. A tryboot still pending here never reached commit.
+        if [ -f "$UOS_STATE/boot/pending" ]; then
+            other="$(uos_other_slot "$booted")"
+            uos_log err "tryboot of slot $other did not commit: rolled back to $booted"
+            rauc status mark-bad other || true
+            uos_status rolled_back os 0 "$(pending_version)" tryboot_failed
+            rm -f "$UOS_STATE/pending-version"
+        fi
+        if wait_healthy; then
+            rauc status mark-good booted || true
+            uos_log notice "unlook-stream healthy (slot $booted)"
+            exit 0
+        fi
+        uos_log err "unlook-stream not healthy within ${TIMEOUT}s on the committed slot $booted"
+        exit 1
+        ;;
+    *)
+        echo "usage: $0 --boot | --wait [seconds] | --once" >&2
+        exit 64
+        ;;
+esac

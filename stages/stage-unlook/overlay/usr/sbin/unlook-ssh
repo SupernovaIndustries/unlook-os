@@ -1,0 +1,99 @@
+#!/bin/sh
+# unlook-ssh -- SSH is OFF by default; this is the only switch.
+#
+#   unlook-ssh enable     host key + firewall hole + sshd (key-only, @ADMIN_USER@)
+#   unlook-ssh disable
+#   unlook-ssh status
+#   unlook-ssh add-key <file>   append public keys for @ADMIN_USER@
+#   unlook-ssh sync       (boot) consume the boot-partition seed, restore state
+#
+# State lives on the data partition (/etc/unlook/ssh), so it survives OS
+# updates. Boot-partition seed (physical access, e.g. production or rescue):
+#   /boot/firmware/unlook/authorized_keys   public keys for @ADMIN_USER@
+#   /boot/firmware/unlook/ssh               empty file: enable SSH
+# Both files are deleted from the boot partition once consumed.
+set -eu
+UOS_TAG=unlook-ssh
+# shellcheck source=../lib/unlook-os/common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+ADMIN=@ADMIN_USER@
+D="$UOS_ROOT/etc/unlook/ssh"
+KEYS="$D/authorized_keys.d/$ADMIN"
+FLAG="$D/enabled"
+SEED="$UOS_ROOT/boot/firmware/unlook"
+KEY_RE='^(ssh-ed25519|ecdsa-sha2-nistp(256|384|521)|sk-ssh-ed25519@openssh\.com|sk-ecdsa-sha2-nistp256@openssh\.com|ssh-rsa) [A-Za-z0-9+/=]{40,1024}( [ -~]{0,128})?$'
+
+[ "$(id -u)" -eq 0 ] || uos_die "must run as root"
+install -d -m 0755 "$D" "$D/authorized_keys.d"
+
+add_keys() {
+    [ -f "$1" ] && [ ! -L "$1" ] || uos_die "not a regular file: $1"
+    [ "$(stat -c %s "$1")" -le 16384 ] || uos_die "key file too large"
+    n=0
+    tmp="$KEYS.new"
+    touch "$KEYS"
+    cp "$KEYS" "$tmp"
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="$(printf '%s' "$line" | tr -d '\r')"
+        case "$line" in '' | '#'*) continue ;; esac
+        if printf '%s\n' "$line" | grep -Eq "$KEY_RE" && printf '%s\n' "$line" | ssh-keygen -l -f - >/dev/null 2>&1; then
+            grep -qxF "$line" "$tmp" || { printf '%s\n' "$line" >> "$tmp"; n=$((n + 1)); }
+        else
+            uos_log warning "rejected a malformed public key line"
+        fi
+    done < "$1"
+    chmod 0644 "$tmp"
+    mv -f "$tmp" "$KEYS"
+    uos_log notice "$n public key(s) added for $ADMIN"
+}
+
+fw_open() { nft add element inet unlook admin_tcp '{ 22 }' 2>/dev/null || true; }
+fw_close() { nft delete element inet unlook admin_tcp '{ 22 }' 2>/dev/null || true; }
+
+start_ssh() {
+    [ -s "$KEYS" ] || uos_die "no authorized key for $ADMIN: run 'unlook-ssh add-key <file>' first"
+    if [ ! -s "$D/ssh_host_ed25519_key" ]; then
+        ssh-keygen -q -t ed25519 -N '' -C "$(hostname)" -f "$D/ssh_host_ed25519_key"
+    fi
+    chmod 0600 "$D/ssh_host_ed25519_key"
+    fw_open
+    systemctl start ssh.service
+}
+
+case "${1:-}" in
+    enable)
+        start_ssh
+        : > "$FLAG"
+        uos_log notice "SSH enabled"
+        ;;
+    disable)
+        rm -f "$FLAG"
+        systemctl stop ssh.service 2>/dev/null || true
+        fw_close
+        uos_log notice "SSH disabled"
+        ;;
+    status)
+        if [ -f "$FLAG" ]; then echo "enabled"; else echo "disabled"; fi
+        systemctl is-active ssh.service 2>/dev/null || true
+        ;;
+    add-key)
+        add_keys "${2:?usage: unlook-ssh add-key <file>}"
+        ;;
+    sync)
+        if [ -f "$SEED/authorized_keys" ]; then
+            add_keys "$SEED/authorized_keys" || true
+            rm -f "$SEED/authorized_keys"
+        fi
+        if [ -f "$SEED/ssh" ]; then
+            : > "$FLAG"
+            rm -f "$SEED/ssh"
+            uos_log notice "SSH enabled from the boot partition"
+        fi
+        if [ -f "$FLAG" ]; then start_ssh || uos_log err "SSH flagged but could not start"; fi
+        ;;
+    *)
+        sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+        exit 64
+        ;;
+esac

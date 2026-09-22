@@ -1,0 +1,16 @@
+[Unit]
+Description=Unlook first-boot provisioning (data partition, profile seed, audit key, unit id, pairing code)
+Documentation=file:/usr/share/doc/unlook-os/OS.md
+RequiresMountsFor=/data /etc/unlook /var/lib/unlook /boot/firmware
+ConditionPathExists=!/etc/unlook/.firstboot-done
+Before=unlook-identity.service unlook-stream.service unlook-ssh.service network-pre.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/unlook-os/unlook-firstboot
+TimeoutStartSec=300
+
+[Install]
+WantedBy=multi-user.target

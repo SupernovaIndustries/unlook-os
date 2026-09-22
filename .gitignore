@@ -1,0 +1,10 @@
+/build/
+/deploy/
+/debs/
+/keys/dev/
+/keys/ci/
+*.raucb
+*.img
+*.img.xz
+*.key
+*.asc

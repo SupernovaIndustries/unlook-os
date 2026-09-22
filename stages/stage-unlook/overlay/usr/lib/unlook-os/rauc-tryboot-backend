@@ -1,0 +1,98 @@
+#!/bin/sh
+# RAUC custom bootloader backend for the Raspberry Pi 5 / CM5 firmware "tryboot"
+# A/B mechanism (autoboot.txt on partition 1). Wired in /etc/rauc/system.conf:
+#   [handlers] bootloader-custom-backend=/usr/lib/unlook-os/rauc-tryboot-backend
+#
+#   get-primary                  slot the next boot will try (pending tryboot, else default)
+#   set-primary <A|B>            arm a one-shot tryboot of that slot (never makes it default)
+#   get-state <A|B>              good | bad
+#   set-state <A|B> <good|bad>   good on the tried slot while in tryboot = COMMIT
+#   get-current                  booted slot
+#
+# Safety model: an untested slot is only ever reachable through the firmware's
+# one-shot tryboot flag. Any failure before commit (kernel panic, watchdog,
+# health check, power loss) makes the next boot a normal boot of the previous
+# default slot. See docs/OS.md §6.
+set -eu
+UOS_TAG=rauc-tryboot
+# shellcheck source=common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+BS="$UOS_STATE/boot"
+mkdir -p "$BS"
+
+slot_arg() {
+    case "${1:-}" in
+        A | B) echo "$1" ;;
+        *) uos_die "invalid slot '${1:-}'" ;;
+    esac
+}
+
+pending_slot() {
+    [ -f "$BS/pending" ] || return 0
+    sed -n '1{/^[AB]$/p;}' "$BS/pending"
+}
+
+default_slot() {
+    _p="$(uos_autoboot_get all)" || uos_die "cannot read autoboot.txt"
+    uos_slot_of_part "$_p" || uos_die "autoboot.txt boot_partition=$_p is not a slot"
+}
+
+write_default() {
+    uos_autoboot_set "$(uos_part_of_slot "$1")" "$(uos_part_of_slot "$(uos_other_slot "$1")")"
+}
+
+cmd="${1:-}"
+case "$cmd" in
+    get-primary)
+        p="$(pending_slot)"
+        if [ -n "$p" ]; then echo "$p"; else default_slot; fi
+        ;;
+    set-primary)
+        s="$(slot_arg "${2:-}")"
+        d="$(default_slot)"
+        if [ "$s" = "$d" ]; then
+            rm -f "$BS/pending"
+            write_default "$d"
+        else
+            write_default "$d"
+            printf '%s\n' "$s" > "$BS/pending.new"
+            mv -f "$BS/pending.new" "$BS/pending"
+            rm -f "$BS/bad-$s"
+            uos_log notice "slot $s armed for tryboot (default stays $d)"
+        fi
+        ;;
+    get-state)
+        s="$(slot_arg "${2:-}")"
+        if [ -f "$BS/bad-$s" ]; then echo bad; else echo good; fi
+        ;;
+    set-state)
+        s="$(slot_arg "${2:-}")"
+        case "${3:-}" in
+            good)
+                rm -f "$BS/bad-$s"
+                if [ "$s" = "$(uos_booted_slot)" ] && uos_tryboot_active && [ "$s" != "$(default_slot)" ]; then
+                    write_default "$s"
+                    rm -f "$BS/pending"
+                    mkdir -p "$UOS_RUN"
+                    : > "$UOS_RUN/committed"
+                    uos_log notice "slot $s committed as default"
+                fi
+                ;;
+            bad)
+                : > "$BS/bad-$s"
+                if [ "$(pending_slot)" = "$s" ]; then rm -f "$BS/pending"; fi
+                uos_log warning "slot $s marked bad"
+                ;;
+            *) uos_die "set-state: expected good|bad" ;;
+        esac
+        ;;
+    get-current)
+        uos_booted_slot
+        ;;
+    *)
+        echo "usage: $0 get-primary|set-primary <slot>|get-state <slot>|set-state <slot> good|bad|get-current" >&2
+        exit 1
+        ;;
+esac
+uos_cfg_umount

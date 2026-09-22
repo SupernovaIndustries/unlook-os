@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "deny": [
+      "Edit(CLAUDE.md)",
+      "Write(CLAUDE.md)"
+    ]
+  }
+}

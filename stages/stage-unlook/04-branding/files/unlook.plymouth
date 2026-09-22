@@ -1,0 +1,8 @@
+[Plymouth Theme]
+Name=Unlook
+Description=Supernova Industries / Unlook boot splash
+ModuleName=script
+
+[script]
+ImageDir=/usr/share/plymouth/themes/unlook
+ScriptFile=/usr/share/plymouth/themes/unlook/unlook.script

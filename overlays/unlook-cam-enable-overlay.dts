@@ -1,0 +1,43 @@
+// SPDX-License-Identifier: GPL-2.0-only
+/*
+ * unlook-cam-enable -- camera enable (CAM_GPIO) forced ON for both Mira220s.
+ *
+ * The camera power/enable rail is a GPIO-controlled fixed regulator
+ * (cam0_reg / cam1_reg): CM5 = RP1 GPIO 34 (cam1_reg is an alias of cam0_reg),
+ * CM4 = expander GPIO 5. By default the sensor drivers switch it on and off
+ * with runtime PM, which on the CM5 leaves the Mira220s unpowered / unreliable.
+ * This overlay makes both regulators always-on and boot-on: the enable line is
+ * driven HIGH as soon as the regulator is registered at boot and is never
+ * released, independent of probe order, runtime PM or which camera overlay
+ * references the regulator.
+ *
+ * config.txt (before the camera overlays):
+ *   dtoverlay=unlook-cam-enable
+ *
+ * Copyright (C) 2026, Supernova Industries
+ */
+
+/dts-v1/;
+/plugin/;
+
+/ {
+	compatible = "brcm,bcm2712", "brcm,bcm2711";
+
+	fragment@0 {
+		target = <&cam0_reg>;
+		__overlay__ {
+			status = "okay";
+			regulator-always-on;
+			regulator-boot-on;
+		};
+	};
+
+	fragment@1 {
+		target = <&cam1_reg>;
+		__overlay__ {
+			status = "okay";
+			regulator-always-on;
+			regulator-boot-on;
+		};
+	};
+};

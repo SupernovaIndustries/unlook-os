@@ -1,0 +1,7 @@
+// Unlook OS: nothing updates behind the operator's back, and the SDK .deb
+// apt downloads is kept so unlook-ota can roll an SDK update back offline.
+APT::Install-Recommends "false";
+APT::Periodic::Enable "0";
+APT::Periodic::Update-Package-Lists "0";
+APT::Periodic::Unattended-Upgrade "0";
+Binary::apt::APT::Keep-Downloaded-Packages "true";

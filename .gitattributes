@@ -1,0 +1,5 @@
+# Everything here runs on Linux: LF line endings regardless of the checkout OS.
+* text=auto eol=lf
+*.png binary
+*.jpg binary
+*.gpg binary

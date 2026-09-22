@@ -1,0 +1,25 @@
+# First match wins. Keeps a first-boot `preset-all` from re-enabling anything
+# the image disabled on purpose.
+enable unlook-firstboot.service
+enable unlook-identity.service
+enable unlook-health.service
+enable unlook-tryboot-guard.service
+enable unlook-ssh.service
+enable unlook-stream.service
+enable unlook-usb-gadget.service
+enable nftables.service
+enable NetworkManager.service
+enable bluetooth.service
+disable ssh.service
+disable ssh.socket
+disable sshswitch.service
+disable regenerate_ssh_host_keys.service
+disable avahi-daemon.service
+disable avahi-daemon.socket
+disable userconfig.service
+disable apt-daily.timer
+disable apt-daily-upgrade.timer
+disable man-db.timer
+disable dphys-swapfile.service
+disable rpi-connect.service
+disable rpi-connect-wayvnc.service

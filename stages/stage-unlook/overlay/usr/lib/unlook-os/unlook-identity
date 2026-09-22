@@ -1,0 +1,21 @@
+#!/bin/sh
+# unlook-identity -- every boot: hostname = unit id (UNLK-xxxxxx), from the data
+# partition, so both A/B slots and every OS update keep the same identity.
+set -eu
+UOS_TAG=unlook-identity
+# shellcheck source=common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+unit="$(sed -n '1{/^[A-Za-z0-9][A-Za-z0-9-]\{0,62\}$/p;}' "$UOS_ROOT/etc/unlook/unit-id" 2>/dev/null || true)"
+[ -n "$unit" ] || uos_die "no valid /etc/unlook/unit-id (first boot not completed?)"
+
+if [ "$(cat "$UOS_ROOT/etc/hostname" 2>/dev/null)" != "$unit" ]; then
+    printf '%s\n' "$unit" > "$UOS_ROOT/etc/hostname"
+fi
+hostname "$unit"
+if grep -q '^127\.0\.1\.1[[:space:]]' "$UOS_ROOT/etc/hosts"; then
+    sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t$unit/" "$UOS_ROOT/etc/hosts"
+else
+    printf '127.0.1.1\t%s\n' "$unit" >> "$UOS_ROOT/etc/hosts"
+fi
+uos_log info "hostname $unit"

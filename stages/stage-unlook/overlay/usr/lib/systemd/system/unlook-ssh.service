@@ -1,0 +1,12 @@
+[Unit]
+Description=Unlook SSH state (off unless enabled with unlook-ssh)
+RequiresMountsFor=/etc/unlook /boot/firmware
+After=nftables.service unlook-firstboot.service unlook-identity.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/unlook-ssh sync
+
+[Install]
+WantedBy=multi-user.target

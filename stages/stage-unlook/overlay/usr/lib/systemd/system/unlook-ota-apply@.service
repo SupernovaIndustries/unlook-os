@@ -1,0 +1,12 @@
+# Started by `unlook-ota apply <sdk|os>` (CLI or the SDK's ota_apply command).
+# A separate unit so the update survives the restart of unlook-stream.
+[Unit]
+Description=Unlook OTA apply (%i)
+RequiresMountsFor=/var/lib/unlook /etc/unlook
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/unlook-ota _run-request %i
+TimeoutStartSec=3600
+Nice=5

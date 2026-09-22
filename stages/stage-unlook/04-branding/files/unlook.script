@@ -1,0 +1,15 @@
+# Unlook splash: the Supernova background (logo already centred in the
+# artwork), scaled to cover the screen and centred. Artwork: branding/assets/.
+Window.SetBackgroundTopColor(0.03, 0.08, 0.09);
+Window.SetBackgroundBottomColor(0.03, 0.08, 0.09);
+
+sw = Window.GetWidth();
+sh = Window.GetHeight();
+
+bg = Image("background.png");
+scale = Math.Max(sw / bg.GetWidth(), sh / bg.GetHeight());
+bg_scaled = bg.Scale(bg.GetWidth() * scale, bg.GetHeight() * scale);
+bg_sprite = Sprite(bg_scaled);
+bg_sprite.SetX((sw - bg_scaled.GetWidth()) / 2);
+bg_sprite.SetY((sh - bg_scaled.GetHeight()) / 2);
+bg_sprite.SetZ(-100);

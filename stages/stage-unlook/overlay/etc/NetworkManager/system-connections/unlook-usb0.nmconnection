@@ -1,0 +1,15 @@
+# USB-C gadget Ethernet: the scanner is @USB_GADGET_ADDRESS@ and hands the host a
+# DHCP lease (NetworkManager shared mode), so a PC or robot needs no setup.
+[connection]
+id=unlook-usb0
+type=ethernet
+interface-name=usb0
+autoconnect=true
+
+[ipv4]
+method=shared
+address1=@USB_GADGET_ADDRESS@
+never-default=true
+
+[ipv6]
+method=disabled

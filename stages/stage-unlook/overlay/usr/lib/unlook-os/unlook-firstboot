@@ -1,0 +1,104 @@
+#!/bin/sh
+# unlook-firstboot -- one-time provisioning of a freshly flashed unit.
+# Runs once per DATA partition (marker /etc/unlook/.firstboot-done), so an OS
+# update never repeats it and a factory reset (wiped data) does.
+#
+#   1. grow the data partition to the end of the medium
+#   2. production profile: /boot/firmware/unlook/scanner_profile.yaml, validated
+#      by the SDK itself before it replaces the factory profile
+#   3. per-unit audit key (32 random bytes, 0400) for the SDK AuditLogger
+#   4. unit id + pairing secret (unlook_stream --pairing-code); the pairing
+#      code is written ONCE to the journal for the production label
+set -eu
+UOS_TAG=unlook-firstboot
+# shellcheck source=common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+ETC="$UOS_ROOT/etc/unlook"
+VAR="$UOS_ROOT/var/lib/unlook"
+MARK="$ETC/.firstboot-done"
+PROFILE="$ETC/scanner_profile.yaml"
+SEED="$UOS_ROOT/boot/firmware/unlook"
+PROFILE_MAX=65536
+
+[ -f "$MARK" ] && exit 0
+umask 077
+
+# ---- 1. data partition ----------------------------------------------------------
+if [ -z "$UOS_ROOT" ]; then
+    dev="$(findmnt -no SOURCE /data)"
+    disk="/dev/$(lsblk -no PKNAME "$dev")"
+    part="$(cat "/sys/class/block/$(basename "$dev")/partition")"
+    rc=0
+    growpart "$disk" "$part" >/dev/null 2>&1 || rc=$?
+    case "$rc" in
+        0) resize2fs "$dev" >/dev/null 2>&1 && uos_log notice "data partition grown to $(df -h /data | awk 'NR==2 {print $2}')" ;;
+        1) : ;; # NOCHANGE: already at the end of the medium
+        *) uos_log warning "growpart failed ($rc); data partition keeps its factory size" ;;
+    esac
+fi
+
+install -d -m 0755 "$ETC" "$ETC/ssh" "$ETC/ssh/authorized_keys.d"
+install -d -m 0700 "$VAR" "$VAR/audit" "$VAR/ota" "$VAR/unlook_calib" "$VAR/cad" "$VAR/reports" "$VAR/scans"
+
+# ---- 2. production profile --------------------------------------------------------
+SRC="$SEED/scanner_profile.yaml"
+if [ -e "$SRC" ]; then
+    if [ -L "$SRC" ] || [ ! -f "$SRC" ]; then
+        uos_log err "seed profile is not a regular file: ignored"
+    elif [ "$(stat -c %s "$SRC")" -gt "$PROFILE_MAX" ]; then
+        uos_log err "seed profile larger than $PROFILE_MAX bytes: ignored"
+    elif tr -d '\000' < "$SRC" | cmp -s - "$SRC"; then
+        cand="$ETC/scanner_profile.yaml.seed"
+        install -m 0644 "$SRC" "$cand"
+        # The SDK's own loader is the validator (ranges, paths, sizes).
+        if unlook_stream "$cand" --pairing-code >/dev/null 2>&1; then
+            mv -f "$cand" "$PROFILE"
+            uos_log notice "profile provisioned from the boot partition"
+        else
+            rm -f "$cand"
+            uos_log err "seed profile rejected by the SDK validator: factory profile kept"
+        fi
+    else
+        uos_log err "seed profile contains NUL bytes: ignored"
+    fi
+fi
+
+# ---- 3. audit key ----------------------------------------------------------------
+if [ ! -s "$ETC/audit.key" ]; then
+    head -c 32 /dev/urandom > "$ETC/audit.key.new"
+    [ "$(stat -c %s "$ETC/audit.key.new")" -eq 32 ] || uos_die "could not generate the audit key"
+    chmod 0400 "$ETC/audit.key.new"
+    mv -f "$ETC/audit.key.new" "$ETC/audit.key"
+    uos_log notice "per-unit audit key generated"
+fi
+
+# ---- 4. unit id + pairing code ----------------------------------------------------
+unit=""
+code=""
+if command -v unlook_stream >/dev/null 2>&1; then
+    out="$(UNLOOK_PROFILE="$PROFILE" unlook_stream "$PROFILE" --pairing-code 2>/dev/null)" ||
+        uos_die "unlook_stream --pairing-code failed"
+    unit="$(printf '%s\n' "$out" | sed -n 's/^unit: \([A-Za-z0-9-]\{1,63\}\)$/\1/p' | head -n 1)"
+    code="$(printf '%s\n' "$out" | sed -n 's/^pairing code: \(UNLOOK1:[A-Za-z0-9:-]\{1,120\}\)$/\1/p' | head -n 1)"
+else
+    # Bring-up image (no SDK): same derivation as the SDK's readUnitId() --
+    # last 6 hex digits of the board serial, upper case.
+    hex="$(tr -d '\000' < "$UOS_PROC/device-tree/serial-number" 2>/dev/null | tr -cd '0-9A-Fa-f' | tr 'a-f' 'A-F')"
+    [ "${#hex}" -ge 6 ] || hex="$(tr -cd '0-9a-f' < "$UOS_ROOT/etc/machine-id" | tr 'a-f' 'A-F')"
+    [ "${#hex}" -ge 6 ] && unit="UNLK-$(printf '%s' "$hex" | tail -c 6)"
+    uos_log warning "no unlook_stream (bring-up image): unit id from the board serial, no pairing code"
+fi
+[ -n "$unit" ] || uos_die "could not read the unit id"
+printf '%s\n' "$unit" > "$ETC/unit-id.new"
+chmod 0644 "$ETC/unit-id.new"
+mv -f "$ETC/unit-id.new" "$ETC/unit-id"
+uos_log notice "unit id: $unit"
+if [ -n "$code" ]; then
+    # Owner requirement: shown once in the journal for the production label.
+    # The code IS the pairing credential; the journal is root/adm-only.
+    logger -t unlook-firstboot -p auth.notice -- "pairing code for $unit: $code"
+fi
+
+date -u +%Y-%m-%dT%H:%M:%SZ > "$MARK"
+uos_log notice "first boot provisioning complete"

@@ -1,0 +1,15 @@
+[Unit]
+Description=Unlook health check (A/B commit or rollback)
+Documentation=file:/usr/share/doc/unlook-os/OS.md
+RequiresMountsFor=/var/lib/unlook /etc/unlook
+Wants=unlook-stream.service
+After=unlook-stream.service unlook-firstboot.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/unlook-health --boot
+TimeoutStartSec=600
+
+[Install]
+WantedBy=multi-user.target

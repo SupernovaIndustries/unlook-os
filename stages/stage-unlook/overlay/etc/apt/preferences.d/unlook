@@ -1,0 +1,9 @@
+# The Unlook repository may only supply Unlook packages (and the OpenCV build
+# the SDK needs on bookworm): anything else it offered is never preferred.
+Package: *
+Pin: origin "@UNLOOK_APT_HOST@"
+Pin-Priority: 100
+
+Package: @SDK_PACKAGE@ libunlook-* libopencv* unlook-*
+Pin: origin "@UNLOOK_APT_HOST@"
+Pin-Priority: 900

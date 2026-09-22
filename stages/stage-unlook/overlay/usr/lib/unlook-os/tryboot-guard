@@ -1,0 +1,21 @@
+#!/bin/sh
+# tryboot-guard -- last line of defence for an uncommitted slot.
+# Started at sysinit. On a normal boot it exits at once. On a tryboot it waits
+# TRYBOOT_GUARD_S seconds; unless unlook-health committed the slot (and stopped
+# this unit), it forces a normal reboot = the firmware returns to the previous
+# slot. Covers a wedged user space that never runs the health check.
+set -eu
+UOS_TAG=tryboot-guard
+# shellcheck source=common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+uos_tryboot_active || exit 0
+GUARD="$(uos_conf TRYBOOT_GUARD_S 300 '[0-9]{3,4}')"
+uos_log notice "tryboot: slot must be committed within ${GUARD}s"
+sleep "$GUARD"
+[ -f "$UOS_RUN/committed" ] && exit 0
+uos_log crit "tryboot not committed after ${GUARD}s: forcing rollback"
+sync
+systemctl reboot --no-wall || true
+sleep 60
+reboot -f

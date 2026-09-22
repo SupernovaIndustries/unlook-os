@@ -1,0 +1,36 @@
+# Every file the OS adds to the rootfs, with its mode. Installed by
+# 03-system/00-run.sh; nothing in overlay/ is copied unless listed here.
+# <mode> <flags> <path>      flags: t = template (@KEY@ rendered from the build config), - = verbatim
+0644 - /usr/lib/unlook-os/common.sh
+0755 - /usr/lib/unlook-os/rauc-tryboot-backend
+0755 - /usr/lib/unlook-os/ucp-ping
+0755 - /usr/lib/unlook-os/unlook-firstboot
+0755 - /usr/lib/unlook-os/unlook-identity
+0755 - /usr/lib/unlook-os/tryboot-guard
+0755 - /usr/sbin/unlook-health
+0755 - /usr/sbin/unlook-ota
+0755 t /usr/sbin/unlook-ssh
+0644 - /usr/lib/systemd/system/unlook-firstboot.service
+0644 - /usr/lib/systemd/system/unlook-identity.service
+0644 - /usr/lib/systemd/system/unlook-health.service
+0644 - /usr/lib/systemd/system/unlook-tryboot-guard.service
+0644 - /usr/lib/systemd/system/unlook-ota-apply@.service
+0644 - /usr/lib/systemd/system/unlook-ssh.service
+0644 - /usr/lib/systemd/system/unlook-stream.service.d/10-unlook-os.conf
+0644 - /usr/lib/systemd/system-preset/10-unlook.preset
+0644 - /usr/lib/tmpfiles.d/unlook-os.conf
+0644 - /etc/systemd/journald.conf.d/50-unlook.conf
+0644 - /etc/systemd/system.conf.d/50-unlook-watchdog.conf
+0644 - /etc/sysctl.d/90-unlook.conf
+0644 - /etc/modules-load.d/unlook.conf
+0644 - /etc/NetworkManager/conf.d/90-unlook.conf
+0600 t /etc/NetworkManager/system-connections/unlook-usb0.nmconnection
+0644 t /etc/ssh/sshd_config.d/10-unlook.conf
+0755 t /etc/nftables.conf
+0644 t /etc/rauc/system.conf
+0644 - /etc/apt/apt.conf.d/51unlook
+0644 t /etc/apt/preferences.d/unlook
+0644 t /usr/share/unlook-os/apt-sources.d/unlook.sources
+0644 t /etc/unlook-os/os.conf
+0644 - /usr/lib/systemd/system/unlook-ota-provision.service
+0644 - /usr/share/unlook-os/github_known_hosts

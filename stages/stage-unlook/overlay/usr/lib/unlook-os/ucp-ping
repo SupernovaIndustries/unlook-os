@@ -1,0 +1,32 @@
+#!/bin/bash
+# ucp-ping [host] [port] [timeout_s]
+# Liveness probe over the Unlook Command Protocol (UCP v1, unlook-sdk
+# docs/COMMAND_PROTOCOL.md): expects the "EV hello:" greeting, sends a tagged
+# `ping`, succeeds only on the tagged "OK pong". Exit 0 = alive.
+set -euo pipefail
+
+host="${1:-127.0.0.1}"
+port="${2:-5556}"
+tmo="${3:-3}"
+[[ "$port" =~ ^[0-9]{1,5}$ ]] && ((port >= 1 && port <= 65535)) || exit 64
+[[ "$tmo" =~ ^[0-9]{1,2}$ ]] || exit 64
+[[ "$host" =~ ^[0-9.]{7,15}$ ]] || exit 64
+
+exec 3<>"/dev/tcp/$host/$port" || exit 2
+trap 'exec 3>&- 3<&-' EXIT
+
+IFS= read -r -t "$tmo" line <&3 || exit 3
+line="${line%$'\r'}"
+[[ "$line" == "EV hello:"* ]] || exit 3
+
+printf '#hc ping\n' >&3
+for _ in 1 2 3 4 5 6 7 8; do
+    IFS= read -r -t "$tmo" line <&3 || exit 4
+    line="${line%$'\r'}"
+    case "$line" in
+        "#hc OK pong"*) printf 'quit\n' >&3 || true; exit 0 ;;
+        "#hc ERR"*) exit 5 ;;
+        *) ;; # EV / RES lines broadcast to every client
+    esac
+done
+exit 4

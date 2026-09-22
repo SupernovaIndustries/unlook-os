@@ -1,0 +1,14 @@
+[Unit]
+Description=Unlook unit identity (hostname = unit id)
+RequiresMountsFor=/etc/unlook
+After=unlook-firstboot.service
+Before=network-pre.target unlook-stream.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/unlook-os/unlook-identity
+
+[Install]
+WantedBy=multi-user.target

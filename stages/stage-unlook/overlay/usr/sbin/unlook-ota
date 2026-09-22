@@ -1,0 +1,560 @@
+#!/bin/sh
+# unlook-ota -- the two update channels of an Unlook scanner.
+#
+#   unlook-ota check [--machine]
+#   unlook-ota apply sdk [--foreground]
+#   unlook-ota apply os  [--bundle <file|https-url>] [--allow-downgrade] [--no-reboot] [--foreground]
+#   unlook-ota status [--machine]
+#   unlook-ota history
+#   unlook-ota set-sdk-key <file>     install the read-only GitHub deploy key
+#   unlook-ota provision              (boot) consume /boot/firmware/unlook/sdk-deploy-key
+#
+# sdk : the pre-installed SDK package, updated from SDK_OTA_SOURCE:
+#         github -- latest commit of SDK_GIT_BRANCH (SSH, deploy key, pinned
+#                   host key), built on the unit into a .deb (interim channel)
+#         apt    -- the signed Unlook apt repository
+#       The daemon restarts; if it is not healthy within HEALTH_TIMEOUT_S the
+#       previous .deb (kept in the apt cache) is reinstalled.
+# os  : a signed RAUC bundle into the inactive A/B slot, then a one-shot
+#       firmware tryboot; unlook-health commits or rolls back (docs/OS.md §6).
+#
+# `apply` hands the work to unlook-ota-apply@<channel>.service so it survives
+# the restart of unlook-stream (the SDK starts it from ota_apply:sdk|os).
+#
+# --machine output is one line, the payload of the SDK events (UCP):
+#   check : ota_check:<sdk installed>:<sdk available|->:<os installed>:<os available|->:<online|offline|unconfigured>
+#   status: ota_status:<state>:<channel>:<progress>:<version>:<error>
+set -eu
+UOS_TAG=unlook-ota
+# shellcheck source=../lib/unlook-os/common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+umask 022
+VER_RE='[0-9A-Za-z.+~-]{1,64}'
+SDK_PKG="$(uos_conf SDK_PACKAGE libunlook-sdk-dev '[a-z0-9][a-z0-9.+-]{1,63}')"
+SDK_SRC="$(uos_conf SDK_OTA_SOURCE off 'github|apt|off')"
+GIT_URL="$(uos_conf SDK_GIT_URL '' 'git@github\.com:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git')"
+GIT_BRANCH="$(uos_conf SDK_GIT_BRANCH main '[A-Za-z0-9._/-]{1,64}')"
+GIT_SIGNED="$(uos_conf SDK_GIT_REQUIRE_SIGNED 0 '0|1')"
+OTA_URL="$(uos_conf UNLOOK_OTA_URL '' 'https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._~-]+)*')"
+COMPATIBLE="$(uos_conf RAUC_COMPATIBLE '' '[a-z0-9][a-z0-9-]{0,63}')"
+APT_SOURCES_DIR=/usr/share/unlook-os/apt-sources.d
+KEY_DIR="$UOS_ROOT/etc/unlook/sdk-git"
+GIT_KEY="$KEY_DIR/deploy_key"
+KNOWN_HOSTS=/usr/share/unlook-os/github_known_hosts
+GIT_TRUST=/usr/share/unlook-os/sdk-git-trust
+SRC_DIR="$UOS_STATE/sdk-src"
+# Build on the root filesystem: /data is noexec and CMake runs what it compiles.
+BUILD_DIR=/var/cache/unlook-os/sdk-build
+BUILD_LOG="$UOS_STATE/sdk-build.log"
+BUILD_MIN_FREE_KB=2097152
+DEB_CACHE=/var/cache/apt/archives
+BUNDLE_MAX=4294967296
+LOCK="$UOS_ROOT/run/unlook/ota.lock"
+
+usage() {
+    sed -n '2,26p' "$0" | sed 's/^# \{0,1\}//'
+    exit 64
+}
+
+[ "$(id -u)" -eq 0 ] || uos_die "must run as root"
+mkdir -p "$UOS_RUN" "$UOS_STATE"
+chmod 0700 "$UOS_STATE"
+
+# ---- helpers ------------------------------------------------------------------
+
+sdk_installed() {
+    dpkg-query -W -f='${Version}' "$SDK_PKG" 2>/dev/null || echo none
+}
+
+# Commit of the installed SDK, from its package version <ver>+git<time>.<sha>.
+sdk_installed_sha() {
+    sdk_installed | sed -n 's/.*+git[0-9]\{12\}\.\([0-9a-f]\{7,40\}\)$/\1/p'
+}
+
+# apt restricted to the Unlook repository only: the check never touches Debian.
+apt_unlook() {
+    apt-get -q -o Dir::Etc::sourcelist=/dev/null -o Dir::Etc::sourceparts="$APT_SOURCES_DIR" \
+        -o APT::Get::List-Cleanup=0 "$@"
+}
+
+sdk_candidate() {
+    apt-cache policy "$SDK_PKG" 2>/dev/null | sed -n 's/^[[:space:]]*Candidate:[[:space:]]*//p' | head -n 1
+}
+
+# git over SSH with the unit's deploy key only, GitHub's host key pinned, never interactive.
+git_ssh() {
+    GIT_SSH_COMMAND="ssh -i $GIT_KEY -o IdentitiesOnly=yes -o BatchMode=yes -o StrictHostKeyChecking=yes -o UserKnownHostsFile=$KNOWN_HOSTS -o ConnectTimeout=20" \
+        GIT_TERMINAL_PROMPT=0 git "$@"
+}
+
+github_head() {
+    git_ssh ls-remote "$GIT_URL" "refs/heads/$GIT_BRANCH" 2>/dev/null |
+        awk 'NR==1 {print $1}' | grep -E '^[0-9a-f]{40}$'
+}
+
+os_installed() {
+    uos_release_get VERSION
+}
+
+# Fetch <url>/<compatible>/latest -> sets OS_AVAIL, OS_BUNDLE, OS_SHA256.
+# The pointer is untrusted: it only chooses WHICH bundle; the bundle's own
+# signature, compatible and version are verified by RAUC and the install hook.
+os_latest() {
+    OS_AVAIL=""
+    OS_BUNDLE=""
+    OS_SHA256=""
+    [ -n "$OTA_URL" ] && [ -n "$COMPATIBLE" ] || return 1
+    _l="$(curl -fsS --proto =https --tlsv1.2 --max-time 20 --max-filesize 4096 \
+        "$OTA_URL/$COMPATIBLE/latest")" || return 1
+    OS_AVAIL="$(printf '%s\n' "$_l" | sed -n 's/^version=//p' | head -n 1)"
+    OS_BUNDLE="$(printf '%s\n' "$_l" | sed -n 's/^bundle=//p' | head -n 1)"
+    OS_SHA256="$(printf '%s\n' "$_l" | sed -n 's/^sha256=//p' | head -n 1)"
+    printf '%s' "$OS_AVAIL" | grep -Eq "^$VER_RE\$" || return 1
+    printf '%s' "$OS_BUNDLE" | grep -Eq '^[A-Za-z0-9._+~-]{1,128}\.raucb$' || return 1
+    printf '%s' "$OS_SHA256" | grep -Eq '^[0-9a-f]{64}$' || return 1
+}
+
+newer() { dpkg --compare-versions "$1" gt "$2"; }
+
+sdk_channel_configured() {
+    case "$SDK_SRC" in
+        github) [ -n "$GIT_URL" ] && [ -s "$GIT_KEY" ] && command -v git >/dev/null ;;
+        apt) [ -f "$APT_SOURCES_DIR/unlook.sources" ] ;;
+        *) return 1 ;;
+    esac
+}
+os_channel_configured() { [ -n "$OTA_URL" ] && [ -n "$COMPATIBLE" ]; }
+
+# ---- check --------------------------------------------------------------------
+
+# net: online | offline (a configured server did not answer) | unconfigured
+# (no update source configured: only `apply os --bundle <file>` works).
+cmd_check() {
+    net=unconfigured
+    sdk_i="$(sdk_installed)"
+    sdk_a=-
+    if sdk_channel_configured; then
+        net=online
+        case "$SDK_SRC" in
+            github)
+                if head="$(github_head)"; then
+                    inst="$(sdk_installed_sha)"
+                    if [ -z "$inst" ] || [ "${head#"$inst"}" = "$head" ]; then
+                        sdk_a="git.$(printf '%s' "$head" | cut -c1-10)"
+                    fi
+                else
+                    net=offline
+                fi
+                ;;
+            apt)
+                if apt_unlook update >/dev/null 2>&1; then
+                    c="$(sdk_candidate)"
+                    if [ -n "$c" ] && [ "$c" != "(none)" ] && [ "$sdk_i" != none ] && newer "$c" "$sdk_i"; then
+                        sdk_a="$c"
+                    fi
+                else
+                    net=offline
+                fi
+                ;;
+        esac
+    fi
+    os_i="$(os_installed)"
+    os_a=-
+    if os_channel_configured; then
+        [ "$net" = offline ] || net=online
+        if os_latest; then
+            if newer "$OS_AVAIL" "$os_i"; then os_a="$OS_AVAIL"; fi
+        else
+            net=offline
+        fi
+    fi
+    if [ "${1:-}" = --machine ]; then
+        echo "ota_check:$sdk_i:$sdk_a:$os_i:$os_a:$net"
+    else
+        echo "SDK ($SDK_PKG, source $SDK_SRC): installed $sdk_i, available ${sdk_a}"
+        echo "OS  ($COMPATIBLE): installed $os_i, available ${os_a}"
+        echo "update sources: $net"
+    fi
+}
+
+# ---- apply: sdk -----------------------------------------------------------------
+# Each source sets NEW (version) and either installs it itself (apt) or leaves a
+# built package in NEW_DEB (github). Return 0 = something to verify, 2 = up to
+# date, 1 = failed (status already written).
+
+sdk_from_apt() {
+    uos_status checking sdk 5 "$prev" -
+    if ! apt_unlook update >/dev/null 2>&1; then
+        uos_status failed sdk 0 "$prev" repo_unreachable
+        return 1
+    fi
+    NEW="$(sdk_candidate)"
+    if [ -z "$NEW" ] || [ "$NEW" = "(none)" ] || ! newer "$NEW" "$prev"; then
+        return 2
+    fi
+    uos_status installing sdk 30 "$NEW" -
+    # apt verifies the repository signature (Signed-By keyring); no --allow-unauthenticated anywhere.
+    if ! DEBIAN_FRONTEND=noninteractive apt_unlook install -y --only-upgrade --no-install-recommends \
+        -o Dpkg::Options::=--force-confold "$SDK_PKG=$NEW" >/dev/null 2>&1; then
+        uos_status failed sdk 0 "$NEW" install_failed
+        return 1
+    fi
+}
+
+sdk_from_github() {
+    uos_status checking sdk 5 "$prev" -
+    if [ ! -d "$SRC_DIR/.git" ]; then
+        rm -rf "$SRC_DIR"
+        git init -q "$SRC_DIR"
+    fi
+    git -C "$SRC_DIR" remote remove origin 2>/dev/null || true
+    git -C "$SRC_DIR" remote add origin "$GIT_URL"
+    uos_status downloading sdk 10 "$prev" -
+    if ! git_ssh -C "$SRC_DIR" fetch -q --depth 1 origin \
+        "+refs/heads/$GIT_BRANCH:refs/remotes/origin/$GIT_BRANCH" 2>> "$BUILD_LOG"; then
+        uos_status failed sdk 0 "$prev" repo_unreachable
+        return 1
+    fi
+    git -C "$SRC_DIR" checkout -q --force --detach "refs/remotes/origin/$GIT_BRANCH"
+    git -C "$SRC_DIR" clean -q -fdx
+    sha="$(git -C "$SRC_DIR" rev-parse HEAD)"
+    inst="$(sdk_installed_sha)"
+    # The installed package already is this commit (its version carries the short sha).
+    if [ -n "$inst" ] && [ "${sha#"$inst"}" != "$sha" ]; then
+        return 2
+    fi
+    if [ "$GIT_SIGNED" = 1 ]; then
+        # Trusted signers: /usr/share/unlook-os/sdk-git-trust/*.asc (public keys).
+        g="$(mktemp -d)"
+        ok=0
+        if ls "$GIT_TRUST"/*.asc >/dev/null 2>&1 &&
+            gpg --batch --quiet --homedir "$g" --import "$GIT_TRUST"/*.asc 2>/dev/null &&
+            GNUPGHOME="$g" git -C "$SRC_DIR" verify-commit HEAD >/dev/null 2>&1; then
+            ok=1
+        fi
+        rm -rf "$g"
+        if [ "$ok" -ne 1 ]; then
+            uos_status failed sdk 0 "git.$(printf '%s' "$sha" | cut -c1-10)" signature_invalid
+            return 1
+        fi
+    fi
+    base="$(sed -n 's/^[[:space:]]*VERSION \([0-9][0-9.]*\)$/\1/p' "$SRC_DIR/CMakeLists.txt" | head -n 1)"
+    when="$(git -C "$SRC_DIR" log -1 --format=%cd --date=format:%Y%m%d%H%M)"
+    NEW="${base}+git${when}.$(printf '%s' "$sha" | cut -c1-10)"
+    printf '%s' "$NEW" | grep -Eq "^$VER_RE\$" || { uos_status failed sdk 0 - bad_version; return 1; }
+    if [ "$prev" != none ] && ! newer "$NEW" "$prev"; then
+        uos_status failed sdk 0 "$NEW" not_newer
+        return 1
+    fi
+    install -d "$BUILD_DIR"
+    free="$(df -Pk "$BUILD_DIR" | awk 'NR==2 {print $4}')"
+    if [ "$free" -lt "$BUILD_MIN_FREE_KB" ]; then
+        uos_status failed sdk 0 "$NEW" no_space
+        return 1
+    fi
+    jobs=$(($(nproc) / 2))
+    [ "$jobs" -ge 1 ] || jobs=1
+    uos_log notice "building SDK $NEW from $GIT_URL@$GIT_BRANCH"
+    uos_status building sdk 20 "$NEW" -
+    # Same flags as scripts/build-sdk-deb.sh (the CI build).
+    rm -rf "$BUILD_DIR"
+    if ! {
+        nice -n 10 cmake -S "$SRC_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
+            -DUNLOOK_SDK_INSTALL_SYSTEMD=ON -DCPACK_DEBIAN_PACKAGE_VERSION="$NEW" -DCPACK_DEBIAN_FILE_NAME=DEB-DEFAULT &&
+            nice -n 10 cmake --build "$BUILD_DIR" -j"$jobs" &&
+            (cd "$BUILD_DIR" && cpack -G DEB)
+    } >> "$BUILD_LOG" 2>&1; then
+        uos_status failed sdk 0 "$NEW" build_failed
+        rm -rf "$BUILD_DIR"
+        return 1
+    fi
+    NEW_DEB="$(ls "$BUILD_DIR/${SDK_PKG}_${NEW}_arm64.deb" 2>/dev/null || true)"
+    if [ -z "$NEW_DEB" ]; then
+        uos_status failed sdk 0 "$NEW" build_failed
+        return 1
+    fi
+    # Keep it next to the previous one: the rollback source for the NEXT update.
+    cp -f "$NEW_DEB" "$DEB_CACHE/"
+    NEW_DEB="$DEB_CACHE/$(basename "$NEW_DEB")"
+    rm -rf "$BUILD_DIR"
+    uos_status installing sdk 70 "$NEW" -
+    if ! DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold "$NEW_DEB" >> "$BUILD_LOG" 2>&1; then
+        uos_status failed sdk 0 "$NEW" install_failed
+        restore_prev_deb || true
+        return 1
+    fi
+}
+
+restore_prev_deb() {
+    deb="$(ls "$DEB_CACHE/${SDK_PKG}_$(printf '%s' "$prev" | sed 's/:/%3a/')"_*.deb 2>/dev/null | head -n 1)"
+    [ -n "$deb" ] || return 1
+    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold "$deb" >/dev/null 2>&1
+}
+
+run_sdk() {
+    prev="$(sdk_installed)"
+    NEW=""
+    NEW_DEB=""
+    if ! sdk_channel_configured; then
+        uos_status failed sdk 0 "$prev" not_configured
+        return 1
+    fi
+    : > "$BUILD_LOG"
+    rc=0
+    case "$SDK_SRC" in
+        github) sdk_from_github || rc=$? ;;
+        apt) sdk_from_apt || rc=$? ;;
+    esac
+    case "$rc" in
+        0) ;;
+        2) uos_status done sdk 100 "$prev" up_to_date; return 0 ;;
+        *) return 1 ;;
+    esac
+    uos_log notice "SDK $prev -> $NEW installed: verifying"
+    systemctl restart unlook-stream.service || true
+    uos_status verifying sdk 80 "$NEW" -
+    if unlook-health --wait; then
+        uos_status done sdk 100 "$NEW" -
+        return 0
+    fi
+    uos_log err "SDK $NEW unhealthy: reinstalling $prev"
+    if restore_prev_deb; then
+        systemctl restart unlook-stream.service || true
+        unlook-health --wait || true
+        uos_status rolled_back sdk 0 "$NEW" health_timeout
+    else
+        uos_status failed sdk 0 "$NEW" health_timeout_no_rollback
+    fi
+    return 1
+}
+
+# ---- apply: os ------------------------------------------------------------------
+
+run_os() {
+    src="${BUNDLE:-}"
+    os_i="$(os_installed)"
+    uos_status checking os 2 "$os_i" -
+    if [ -z "$src" ]; then
+        if ! os_channel_configured; then
+            uos_status failed os 0 "$os_i" not_configured
+            return 1
+        fi
+        if ! os_latest; then
+            uos_status failed os 0 "$os_i" repo_unreachable
+            return 1
+        fi
+        if ! newer "$OS_AVAIL" "$os_i" && [ "$ALLOW_DOWNGRADE" -eq 0 ]; then
+            uos_status done os 100 "$os_i" up_to_date
+            return 0
+        fi
+        src="$OTA_URL/$COMPATIBLE/$OS_BUNDLE"
+    fi
+    file="$src"
+    case "$src" in
+        https://*)
+            file="$UOS_STATE/download.raucb"
+            need=$(((BUNDLE_MAX / 1024) + 262144))
+            free="$(df -Pk "$UOS_STATE" | awk 'NR==2 {print $4}')"
+            if [ "$free" -lt "$need" ]; then
+                uos_status failed os 0 "${OS_AVAIL:-?}" no_space
+                return 1
+            fi
+            uos_status downloading os 10 "${OS_AVAIL:-?}" -
+            if ! curl -fsS --proto =https --tlsv1.2 --max-filesize "$BUNDLE_MAX" --retry 3 \
+                -o "$file" "$src"; then
+                rm -f "$file"
+                uos_status failed os 0 "${OS_AVAIL:-?}" download_failed
+                return 1
+            fi
+            if [ -n "${OS_SHA256:-}" ] && [ "$(sha256sum "$file" | cut -d' ' -f1)" != "$OS_SHA256" ]; then
+                rm -f "$file"
+                uos_status failed os 0 "${OS_AVAIL:-?}" checksum_mismatch
+                return 1
+            fi
+            ;;
+        /*) [ -f "$src" ] || { uos_status failed os 0 - bundle_not_found; return 1; } ;;
+        *) uos_status failed os 0 - bad_bundle_source; return 1 ;;
+    esac
+
+    # Signature + compatible are verified here, again by `rauc install`, and the
+    # bundle's install-check hook refuses downgrades.
+    info="$(rauc info --output-format=shell "$file" 2>/dev/null)" || {
+        uos_status failed os 0 - signature_invalid
+        rm -f "$UOS_STATE/download.raucb"
+        return 1
+    }
+    mf_compat="$(printf '%s\n' "$info" | sed -n "s/^RAUC_MF_COMPATIBLE='\(.*\)'\$/\1/p")"
+    mf_ver="$(printf '%s\n' "$info" | sed -n "s/^RAUC_MF_VERSION='\(.*\)'\$/\1/p")"
+    if [ "$mf_compat" != "$COMPATIBLE" ]; then
+        uos_status failed os 0 "$mf_ver" incompatible
+        return 1
+    fi
+    printf '%s' "$mf_ver" | grep -Eq "^$VER_RE\$" || { uos_status failed os 0 - bad_version; return 1; }
+    if ! newer "$mf_ver" "$os_i" && [ "$ALLOW_DOWNGRADE" -eq 0 ]; then
+        uos_status failed os 0 "$mf_ver" not_newer
+        return 1
+    fi
+    if [ "$ALLOW_DOWNGRADE" -eq 1 ]; then : > "$UOS_RUN/allow-downgrade"; fi
+    printf '%s\n' "$mf_ver" > "$UOS_STATE/pending-version"
+
+    uos_log notice "installing OS $mf_ver into the inactive slot"
+    uos_status installing os 30 "$mf_ver" -
+    rlog="$UOS_RUN/rauc-install.log"
+    rauc install "$file" > "$rlog" 2>&1 &
+    rpid=$!
+    while kill -0 "$rpid" 2>/dev/null; do
+        p="$(sed -n 's/^[^0-9]*\([0-9]\{1,3\}\)%.*/\1/p' "$rlog" | tail -n 1)"
+        if [ -n "$p" ] && [ "$p" -le 100 ]; then
+            uos_status installing os $((30 + p * 60 / 100)) "$mf_ver" -
+        fi
+        sleep 2
+    done
+    if wait "$rpid"; then rc=0; else rc=$?; fi
+    rm -f "$UOS_RUN/allow-downgrade" "$UOS_STATE/download.raucb"
+    if [ "$rc" -ne 0 ]; then
+        uos_log err "rauc install failed ($rc): $(tail -n 3 "$rlog" | tr '\n' ' ')"
+        rm -f "$UOS_STATE/pending-version"
+        uos_status failed os 0 "$mf_ver" install_failed
+        return 1
+    fi
+    if [ "$NO_REBOOT" -eq 1 ]; then
+        uos_status installed os 90 "$mf_ver" -
+        uos_log notice "installed; reboot with: systemctl reboot '0 tryboot'"
+        return 0
+    fi
+    uos_status rebooting os 90 "$mf_ver" -
+    sync
+    systemctl reboot '0 tryboot'
+}
+
+# ---- deploy key -----------------------------------------------------------------
+
+# Validates and installs an OpenSSH private key (the GitHub read-only deploy
+# key of the SDK repository) into the data partition, 0600 root.
+install_sdk_key() {
+    k="$1"
+    [ -f "$k" ] && [ ! -L "$k" ] || uos_die "not a regular file: $k"
+    [ "$(stat -c %s "$k")" -le 8192 ] || uos_die "key file too large"
+    head -n 1 "$k" | tr -d '\r' | grep -qx -- '-----BEGIN OPENSSH PRIVATE KEY-----' || uos_die "not an OpenSSH private key"
+    umask 077
+    install -d -m 0700 "$KEY_DIR"
+    tr -d '\r' < "$k" > "$GIT_KEY.new"
+    chmod 0600 "$GIT_KEY.new"
+    ssh-keygen -y -f "$GIT_KEY.new" > /dev/null 2>&1 || { rm -f "$GIT_KEY.new"; uos_die "invalid or passphrase-protected key"; }
+    mv -f "$GIT_KEY.new" "$GIT_KEY"
+    uos_log notice "SDK deploy key installed ($(ssh-keygen -l -f "$GIT_KEY" | awk '{print $2}'))"
+}
+
+cmd_provision() {
+    seed="$UOS_ROOT/boot/firmware/unlook/sdk-deploy-key"
+    [ -e "$seed" ] || return 0
+    install_sdk_key "$seed" || true
+    rm -f "$seed"
+    sync
+}
+
+# ---- dispatch -------------------------------------------------------------------
+
+cmd_apply() {
+    CH="${1:-}"
+    shift || true
+    BUNDLE=""
+    ALLOW_DOWNGRADE=0
+    NO_REBOOT=0
+    FOREGROUND=0
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --bundle) BUNDLE="${2:-}"; shift ;;
+            --allow-downgrade) ALLOW_DOWNGRADE=1 ;;
+            --no-reboot) NO_REBOOT=1 ;;
+            --foreground) FOREGROUND=1 ;;
+            *) usage ;;
+        esac
+        shift
+    done
+    case "$CH" in sdk | os) ;; *) usage ;; esac
+    if [ -n "$BUNDLE" ]; then
+        [ "$CH" = os ] || usage
+        printf '%s' "$BUNDLE" | grep -Eq '^(/[A-Za-z0-9._+~/-]{1,1024}|https://[A-Za-z0-9.-]+(:[0-9]+)?(/[A-Za-z0-9._+~-]+)+)$' ||
+            uos_die "invalid --bundle"
+        case "$BUNDLE" in *..*) uos_die "invalid --bundle" ;; esac
+    fi
+    if [ "$FOREGROUND" -eq 0 ]; then
+        if ! (flock -n 9) 9> "$LOCK"; then
+            echo "ota_busy"
+            exit 75
+        fi
+        # The request file is the only channel into the service instance.
+        req="$UOS_RUN/request-$CH"
+        {
+            echo "BUNDLE=$BUNDLE"
+            echo "ALLOW_DOWNGRADE=$ALLOW_DOWNGRADE"
+            echo "NO_REBOOT=$NO_REBOOT"
+        } > "$req.new"
+        mv -f "$req.new" "$req"
+        systemctl start --no-block "unlook-ota-apply@$CH.service"
+        echo "ota_apply_queued:$CH"
+        return 0
+    fi
+    exec 9> "$LOCK"
+    flock -n 9 || uos_die "another update is running"
+    if [ "$CH" = sdk ]; then run_sdk; else run_os; fi
+}
+
+# Entry point of unlook-ota-apply@.service: re-reads and re-validates the request.
+cmd_run_request() {
+    CH="${1:-}"
+    case "$CH" in sdk | os) ;; *) uos_die "bad channel" ;; esac
+    req="$UOS_RUN/request-$CH"
+    b=""
+    d=0
+    n=0
+    if [ -f "$req" ]; then
+        b="$(sed -n 's/^BUNDLE=//p' "$req" | head -n 1)"
+        d="$(sed -n 's/^ALLOW_DOWNGRADE=\([01]\)$/\1/p' "$req" | head -n 1)"
+        n="$(sed -n 's/^NO_REBOOT=\([01]\)$/\1/p' "$req" | head -n 1)"
+        rm -f "$req"
+    fi
+    set -- "$CH" --foreground
+    [ -n "$b" ] && set -- "$@" --bundle "$b"
+    [ "${d:-0}" = 1 ] && set -- "$@" --allow-downgrade
+    [ "${n:-0}" = 1 ] && set -- "$@" --no-reboot
+    cmd_apply "$@"
+}
+
+cmd_status() {
+    f="$UOS_RUN/status"
+    [ -f "$f" ] || f="$UOS_STATE/last"
+    if [ ! -f "$f" ]; then
+        st=idle ch=- pr=0 ve="$(os_installed)" er=-
+    else
+        st="$(sed -n 's/^state=//p' "$f")"
+        ch="$(sed -n 's/^channel=//p' "$f")"
+        pr="$(sed -n 's/^progress=//p' "$f")"
+        ve="$(sed -n 's/^version=//p' "$f")"
+        er="$(sed -n 's/^error=//p' "$f")"
+    fi
+    if [ "${1:-}" = --machine ]; then
+        echo "ota_status:$st:$ch:$pr:$ve:$er"
+    else
+        echo "state:    $st"
+        echo "channel:  $ch"
+        echo "progress: $pr%"
+        echo "version:  $ve"
+        echo "error:    $er"
+        echo "os:       $(os_installed) (slot $(uos_booted_slot), keyring $(uos_release_get KEYRING_KIND))"
+        echo "sdk:      $(sdk_installed) (source $SDK_SRC)"
+    fi
+}
+
+case "${1:-}" in
+    check) shift; cmd_check "$@" ;;
+    apply) shift; cmd_apply "$@" ;;
+    status) shift; cmd_status "$@" ;;
+    history) cat "$UOS_STATE/history" 2>/dev/null || true ;;
+    set-sdk-key) install_sdk_key "${2:?usage: unlook-ota set-sdk-key <file>}" ;;
+    provision) cmd_provision ;;
+    _run-request) cmd_run_request "${2:-}" ;;
+    *) usage ;;
+esac

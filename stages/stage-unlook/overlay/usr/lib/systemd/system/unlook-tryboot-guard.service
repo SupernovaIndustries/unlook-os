@@ -1,0 +1,13 @@
+[Unit]
+Description=Unlook tryboot guard (reboot to the previous slot if the new one never commits)
+DefaultDependencies=no
+After=local-fs.target
+Conflicts=shutdown.target
+Before=shutdown.target
+
+[Service]
+Type=simple
+ExecStart=/usr/lib/unlook-os/tryboot-guard
+
+[Install]
+WantedBy=sysinit.target

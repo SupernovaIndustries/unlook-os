@@ -1,0 +1,6 @@
+Types: deb
+URIs: @UNLOOK_APT_URL@
+Suites: @UNLOOK_APT_SUITE@
+Components: @UNLOOK_APT_COMPONENT@
+Architectures: arm64
+Signed-By: /usr/share/keyrings/unlook-archive-keyring.gpg

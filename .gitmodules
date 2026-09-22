@@ -1,0 +1,7 @@
+[submodule "unlook-sdk"]
+	path = unlook-sdk
+	url = ../unlook-sdk.git
+	branch = main
+[submodule "drivers/mira220-sync"]
+	path = drivers/mira220-sync
+	url = ../mira220-sync.git

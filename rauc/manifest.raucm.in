@@ -1,0 +1,20 @@
+[update]
+compatible=@RAUC_COMPATIBLE@
+version=@VERSION@
+description=Unlook OS @VERSION@
+build=@BUILD@
+
+[bundle]
+format=verity
+
+[hooks]
+filename=hook.sh
+hooks=install-check
+
+[image.rootfs]
+filename=rootfs.ext4
+hooks=post-install
+
+[image.bootfs]
+filename=bootfs.vfat
+hooks=post-install
