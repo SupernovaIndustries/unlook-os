@@ -1,0 +1,17 @@
+[Unit]
+Description=Unlook: apply Raspberry Pi Imager OS customisation (firstrun.sh on the cfg partition)
+Documentation=file:/usr/share/doc/unlook-os/OS.md
+DefaultDependencies=no
+RequiresMountsFor=/etc/unlook /var/lib/unlook
+After=local-fs.target systemd-remount-fs.service
+Before=unlook-firstboot.service unlook-identity.service unlook-ssh.service network-pre.target sysinit.target
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/lib/unlook-os/unlook-imager
+TimeoutStartSec=300
+
+[Install]
+WantedBy=sysinit.target

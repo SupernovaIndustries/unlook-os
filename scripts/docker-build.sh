@@ -35,8 +35,13 @@ docker volume create unlook-pigen-work >/dev/null
 TTY=""
 [ -t 0 ] && [ -t 1 ] && TTY="-it"
 # shellcheck disable=SC2086 # TTY is empty or one flag
-exec docker run --rm $TTY --privileged --platform linux/arm64 \
+docker run --rm $TTY --privileged --platform linux/arm64 \
     -v "$TOP:/work" -v unlook-pigen-work:/pigen-work -w /work \
     -e KEYS_DIR -e KEYRING_KIND -e SDK_DEB_SOURCE -e SDK_OTA_SOURCE -e UNLOOK_OS_RELEASE \
     -e RAUC_SIGNING_CERT -e RAUC_SIGNING_KEY -e BRANDING \
     unlook-os-builder sh scripts/in-container.sh "$STEP"
+
+# Raspberry Pi Imager catalogue with this host's path to the image.
+case "$STEP" in
+    all | image) sh "$TOP/scripts/imager-manifest.sh" "$TOP/deploy" ;;
+esac

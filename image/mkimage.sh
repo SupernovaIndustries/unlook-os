@@ -94,8 +94,18 @@ rm -f "$BASE.bootfs.vfat"
 mkfs.vfat -C -F 32 -n UNLOOKBOOT -i 554c4b42 "$BASE.bootfs.vfat" $((PART_BOOT_MB * 1024)) >/dev/null
 MTOOLS_SKIP_CHECK=1 mcopy -s -p -m -i "$BASE.bootfs.vfat" "$B"/* ::/
 
+# Partition 1 is also where Raspberry Pi Imager writes its OS customisation
+# (firstrun.sh, config.txt merge, cmdline.txt edit: it always uses the first FAT
+# partition). The firmware only reads autoboot.txt here; these two files exist
+# so Imager's edits succeed, and unlook-imager.service consumes firstrun.sh.
+cp "$B/cmdline.txt" "$W/cmdline.txt"
+printf '%s\n' "# Unlook OS: this partition only selects the A/B slot (autoboot.txt)." \
+    "# The kernel reads config.txt/cmdline.txt from the slot's boot partition;" \
+    "# Raspberry Pi Imager customisation written here is applied by unlook-imager." > "$W/config.txt"
 mkfs.vfat -C -F 32 -n UNLOOKCFG -i 554c4b43 "$W/cfg.vfat" $((PART_CFG_MB * 1024)) >/dev/null
 MTOOLS_SKIP_CHECK=1 mcopy -i "$W/cfg.vfat" "$W/autoboot.txt" ::/autoboot.txt
+MTOOLS_SKIP_CHECK=1 mcopy -i "$W/cfg.vfat" "$W/cmdline.txt" ::/cmdline.txt
+MTOOLS_SKIP_CHECK=1 mcopy -i "$W/cfg.vfat" "$W/config.txt" ::/config.txt
 
 mkfs.ext4 -q -F -L unlook-data -U "$(uuid_from data)" -d "$D" "$W/data.ext4" "${PART_DATA_MB}M"
 
@@ -134,6 +144,16 @@ put "$W/data.ext4" "$S6"
 
 log "compressing image"
 xz -T0 -6 -c "$IMG" > "$BASE.img.xz"
+# Sizes and hashes for the Raspberry Pi Imager manifest (scripts/imager-manifest.sh).
+{
+    echo "image=$(basename "$BASE").img.xz"
+    echo "extract_size=$(stat -c %s "$IMG")"
+    echo "extract_sha256=$(sha256sum "$IMG" | cut -d' ' -f1)"
+    echo "image_download_size=$(stat -c %s "$BASE.img.xz")"
+    echo "image_download_sha256=$(sha256sum "$BASE.img.xz" | cut -d' ' -f1)"
+    echo "release_date=$(date -u -d "@$SOURCE_DATE_EPOCH" +%Y-%m-%d)"
+    echo "version=$V"
+} > "$BASE.imageinfo"
 (cd "$OUT" && sha256sum "$(basename "$BASE").img.xz" "$(basename "$BASE").rootfs.ext4" \
     "$(basename "$BASE").bootfs.vfat" > "$(basename "$BASE").SHA256SUMS")
 log "done: $BASE.img.xz"

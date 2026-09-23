@@ -165,11 +165,13 @@ for g in video i2c gpio bluetooth netdev dialout; do
     if getent group \$g >/dev/null; then usermod -aG \$g ${SERVICE_USER}; fi
 done
 # Admin: key-only SSH (unlook-ssh), password locked. Root locked.
-usermod -aG adm,systemd-journal ${ADMIN_USER}
+# sshd admits the group, not a name: Raspberry Pi Imager may rename the user.
+groupadd -f unlook-ssh
+usermod -aG adm,systemd-journal,unlook-ssh ${ADMIN_USER}
 passwd -l ${ADMIN_USER}
 passwd -l root
 systemctl enable unlook-firstboot.service unlook-identity.service unlook-health.service \
-    unlook-tryboot-guard.service unlook-ssh.service unlook-ota-provision.service nftables.service \
+    unlook-tryboot-guard.service unlook-ssh.service unlook-ota-provision.service unlook-imager.service nftables.service \
     NetworkManager.service bluetooth.service
 if [ -f /usr/lib/systemd/system/unlook-stream.service ]; then systemctl enable unlook-stream.service; fi
 if [ "${USB_GADGET}" = 1 ]; then systemctl enable unlook-usb-gadget.service; else systemctl disable unlook-usb-gadget.service || true; fi

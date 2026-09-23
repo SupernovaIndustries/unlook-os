@@ -38,3 +38,5 @@
 0755 - /usr/lib/unlook-os/unlook-perms
 0644 t /etc/polkit-1/rules.d/49-unlook.rules
 0644 t /etc/dbus-1/system.d/unlook.conf
+0755 - /usr/lib/unlook-os/unlook-imager
+0644 - /usr/lib/systemd/system/unlook-imager.service

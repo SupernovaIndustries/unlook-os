@@ -1,0 +1,111 @@
+#!/bin/sh
+# unlook-imager -- Raspberry Pi Imager "OS customisation" on the A/B layout.
+#
+# Imager (init_format "systemd", offered through deploy/*.rpi-imager-manifest)
+# writes firstrun.sh into partition 1 (unlook-cfg) and appends systemd.run=... to
+# that partition's cmdline.txt, which the A/B boot never reads. This runs the
+# script once -- exactly what stock Raspberry Pi OS does with it: user name +
+# password, SSH (keys or password), Wi-Fi, hostname, timezone, keyboard -- then
+# records the result on the data partition, so unlook-identity re-applies it on
+# every boot, in both slots and after every OS update.
+#
+# Trust: firstrun.sh comes from the boot medium, i.e. from whoever flashed it
+# (physical access). Owner decision recorded in docs/OS.md §9.
+set -eu
+UOS_TAG=unlook-imager
+# shellcheck source=common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+ETC="$UOS_ROOT/etc/unlook"
+SAVE="$ETC/imager"
+MAX=65536
+
+uos_cfg_mount || exit 0
+FR="$UOS_CFG_DIR/firstrun.sh"
+if [ ! -e "$FR" ]; then
+    uos_cfg_umount
+    exit 0
+fi
+if [ -L "$FR" ] || [ ! -f "$FR" ] || [ "$(stat -c %s "$FR")" -gt "$MAX" ]; then
+    uos_log err "firstrun.sh on the cfg partition is not a regular file <= $MAX bytes: ignored"
+    rm -f "$FR"
+    uos_cfg_umount
+    exit 0
+fi
+# Consume it first: it must never run twice, even if it fails half-way.
+install -d -m 0700 "$UOS_ROOT/run/unlook"
+RUN="$UOS_ROOT/run/unlook/imager-firstrun.sh"
+cp "$FR" "$RUN"
+chmod 0700 "$RUN"
+rm -f "$FR"
+if [ -f "$UOS_CFG_DIR/cmdline.txt" ]; then
+    sed -i -e 's| systemd\.run=[^ ]*||g' -e 's| systemd\.run_success_action=[^ ]*||g' \
+        -e 's| systemd\.unit=kernel-command-line\.target||g' "$UOS_CFG_DIR/cmdline.txt"
+fi
+uos_cfg_umount
+
+host_before="$(cat "$UOS_ROOT/etc/hostname" 2>/dev/null || true)"
+uos_log notice "applying the Raspberry Pi Imager customisation"
+if bash "$RUN" > "$UOS_ROOT/run/unlook/imager-firstrun.log" 2>&1; then
+    uos_log notice "firstrun.sh completed"
+else
+    uos_log warning "firstrun.sh exited non-zero (see /run/unlook/imager-firstrun.log)"
+fi
+rm -f "$RUN"
+
+# ---- record the result on the data partition -------------------------------------
+umask 077
+install -d -m 0700 "$SAVE"
+install -d -m 0755 "$ETC/ssh" "$ETC/ssh/authorized_keys.d" "$ETC/ssh/sshd.d"
+
+user="$(getent passwd 1000 | cut -d: -f1)"
+home="$(getent passwd 1000 | cut -d: -f6)"
+if [ -n "$user" ]; then
+    printf '%s\n' "$user" > "$SAVE/user"
+    hash="$(getent shadow "$user" | cut -d: -f2)"
+    case "$hash" in
+        '' | '!'* | '*'*) rm -f "$SAVE/password-hash" ;;
+        *) printf '%s\n' "$hash" > "$SAVE/password-hash" ;;
+    esac
+    if [ -s "$home/.ssh/authorized_keys" ]; then
+        install -m 0644 "$home/.ssh/authorized_keys" "$ETC/ssh/authorized_keys.d/$user"
+    fi
+fi
+
+# SSH: Imager enables ssh.service; unlook-ssh owns sshd (host key on the data
+# partition, firewall hole), so hand it over.
+if systemctl is-enabled --quiet ssh.service 2>/dev/null; then
+    systemctl disable ssh.service >/dev/null 2>&1 || true
+    : > "$ETC/ssh/enabled"
+    if [ -n "$user" ] && [ ! -s "$ETC/ssh/authorized_keys.d/$user" ]; then
+        # No key given in Imager = password login was chosen there.
+        printf 'PasswordAuthentication yes\nAuthenticationMethods any\n' > "$ETC/ssh/sshd.d/10-imager-password.conf"
+        chmod 0644 "$ETC/ssh/sshd.d/10-imager-password.conf"
+        uos_log notice "SSH enabled by Imager with password login"
+    else
+        rm -f "$ETC/ssh/sshd.d/10-imager-password.conf"
+        uos_log notice "SSH enabled by Imager with public keys"
+    fi
+fi
+
+# Wi-Fi client connection(s) created by Imager.
+install -d -m 0700 "$ETC/network"
+for f in "$UOS_ROOT"/etc/NetworkManager/system-connections/*.nmconnection; do
+    [ -f "$f" ] || continue
+    case "$(basename "$f")" in unlook-usb0.nmconnection) continue ;; esac
+    install -m 0600 "$f" "$ETC/network/$(basename "$f")"
+done
+
+# Hostname, only if Imager changed it.
+host_after="$(cat "$UOS_ROOT/etc/hostname" 2>/dev/null || true)"
+if [ -n "$host_after" ] && [ "$host_after" != "$host_before" ]; then
+    printf '%s\n' "$host_after" > "$ETC/hostname"
+    chmod 0644 "$ETC/hostname"
+fi
+
+# Timezone and keyboard.
+tz="$(readlink "$UOS_ROOT/etc/localtime" 2>/dev/null | sed -n 's|.*/zoneinfo/||p')"
+[ -n "$tz" ] && printf '%s\n' "$tz" > "$SAVE/timezone"
+[ -f "$UOS_ROOT/etc/default/keyboard" ] && cp "$UOS_ROOT/etc/default/keyboard" "$SAVE/keyboard"
+
+uos_log notice "Imager customisation saved on the data partition (restored at every boot)"

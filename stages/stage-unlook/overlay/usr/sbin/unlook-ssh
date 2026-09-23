@@ -1,15 +1,16 @@
 #!/bin/sh
 # unlook-ssh -- SSH is OFF by default; this is the only switch.
 #
-#   unlook-ssh enable     host key + firewall hole + sshd (key-only, @ADMIN_USER@)
+#   unlook-ssh enable     host key + firewall hole + sshd (key-only unless password
+#                         login was chosen in Raspberry Pi Imager)
 #   unlook-ssh disable
 #   unlook-ssh status
-#   unlook-ssh add-key <file>   append public keys for @ADMIN_USER@
+#   unlook-ssh add-key <file>   append public keys for the login user (uid 1000)
 #   unlook-ssh sync       (boot) consume the boot-partition seed, restore state
 #
 # State lives on the data partition (/etc/unlook/ssh), so it survives OS
 # updates. Boot-partition seed (physical access, e.g. production or rescue):
-#   /boot/firmware/unlook/authorized_keys   public keys for @ADMIN_USER@
+#   /boot/firmware/unlook/authorized_keys   public keys for the login user
 #   /boot/firmware/unlook/ssh               empty file: enable SSH
 # Both files are deleted from the boot partition once consumed.
 set -eu
@@ -17,7 +18,10 @@ UOS_TAG=unlook-ssh
 # shellcheck source=../lib/unlook-os/common.sh
 . "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
 
-ADMIN=@ADMIN_USER@
+# Login user: uid 1000 (@ADMIN_USER@, or the name chosen in Raspberry Pi Imager).
+ADMIN="$(getent passwd 1000 | cut -d: -f1)"
+[ -n "$ADMIN" ] || ADMIN=@ADMIN_USER@
+ADMIN_HOME="$(getent passwd "$ADMIN" | cut -d: -f6)"
 D="$UOS_ROOT/etc/unlook/ssh"
 KEYS="$D/authorized_keys.d/$ADMIN"
 FLAG="$D/enabled"
@@ -52,7 +56,11 @@ fw_open() { nft add element inet unlook admin_tcp '{ 22 }' 2>/dev/null || true; 
 fw_close() { nft delete element inet unlook admin_tcp '{ 22 }' 2>/dev/null || true; }
 
 start_ssh() {
-    [ -s "$KEYS" ] || uos_die "no authorized key for $ADMIN: run 'unlook-ssh add-key <file>' first"
+    if [ ! -s "$KEYS" ] && [ ! -s "$ADMIN_HOME/.ssh/authorized_keys" ] &&
+        [ ! -f "$D/sshd.d/10-imager-password.conf" ]; then
+        uos_die "no authorized key for $ADMIN: run 'unlook-ssh add-key <file>' first"
+    fi
+    install -d -m 0755 "$D/sshd.d"
     if [ ! -s "$D/ssh_host_ed25519_key" ]; then
         ssh-keygen -q -t ed25519 -N '' -C "$(hostname)" -f "$D/ssh_host_ed25519_key"
     fi

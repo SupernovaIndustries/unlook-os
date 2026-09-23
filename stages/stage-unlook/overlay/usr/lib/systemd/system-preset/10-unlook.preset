@@ -1,5 +1,6 @@
 # First match wins. Keeps a first-boot `preset-all` from re-enabling anything
 # the image disabled on purpose.
+enable unlook-imager.service
 enable unlook-firstboot.service
 enable unlook-identity.service
 enable unlook-health.service

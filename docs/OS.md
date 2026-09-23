@@ -99,8 +99,9 @@ data partition. A factory reset = re-creating the data partition (§7.4).
 
 **SD card / USB**: Raspberry Pi Imager → "Use custom" → `unlook-os-<ver>.img.xz`,
 or `xzcat unlook-os-<ver>.img.xz | sudo dd of=/dev/sdX bs=4M conv=fsync`.
-Do **not** use Imager's OS customisation (user, Wi-Fi, SSH): Unlook OS ignores
-and disables it.
+Raspberry Pi Imager OS customisation (user/password, SSH, Wi-Fi, locale) **is
+supported** through the catalogue `deploy/unlook-os.json` (README §2.1; §9 for
+the trust model); balenaEtcher / `dd` flash the same `.img.xz` without it.
 
 **CM5 eMMC**: put the carrier in USB boot mode (nRPIBOOT low), run `rpiboot`
 (`usbboot`, mass-storage gadget) on the PC, then write the image to the
@@ -312,6 +313,18 @@ reinstalled with `dpkg -i`, status `rolled_back:health_timeout`.
 - **SSH**: off by default. `sudo unlook-ssh add-key <file>` then
   `sudo unlook-ssh enable` (or the boot-partition seed, §8). Key-only, only
   `unlook-admin`, host key on the data partition. `unlook-ssh disable` closes it.
+- **Raspberry Pi Imager customisation** (owner decision, 2026-09-23): images
+  are published with an Imager catalogue (`deploy/unlook-os.json`,
+  `init_format: systemd`) so Imager can set user + password, SSH (keys **or
+  password**), Wi-Fi, hostname, timezone and keyboard. Imager writes
+  `firstrun.sh` to partition 1; `unlook-imager.service` runs it once (as stock
+  Raspberry Pi OS does) and stores the result on the data partition
+  (`/etc/unlook/imager`, `/etc/unlook/network`, `/etc/unlook/ssh`), restored on
+  every boot by `unlook-identity`. Trust: the script comes from the boot medium,
+  i.e. from whoever flashed it — physical access is already full control. SSH
+  still goes through `unlook-ssh` (host key on the data partition, firewall
+  hole only while enabled, group `unlook-ssh`); password login exists only if
+  it was chosen in Imager. **Production units are flashed without customisation.**
 - **Daemon user** (`SDK_DAEMON_USER`, default `root`): the OS already ships
   what the daemon needs to run unprivileged as `unlook` — polkit
   (`49-unlook.rules`: the NetworkManager actions for the hotspot and starting

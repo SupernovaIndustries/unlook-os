@@ -1,21 +1,75 @@
 #!/bin/sh
-# unlook-identity -- every boot: hostname = unit id (UNLK-xxxxxx), from the data
-# partition, so both A/B slots and every OS update keep the same identity.
+# unlook-identity -- every boot, before the network: make this slot carry the
+# unit's identity and the local settings kept on the data partition, so both
+# A/B slots and every OS update look the same:
+#   * login user (name, password hash) + SSH keys set through Raspberry Pi Imager
+#   * Wi-Fi client connections set through Imager
+#   * timezone, keyboard
+#   * hostname: Imager's if one was set, else the unit id (UNLK-xxxxxx)
+# The saved settings come from unlook-imager (docs/OS.md §4.1).
 set -eu
 UOS_TAG=unlook-identity
 # shellcheck source=common.sh
 . "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
 
-unit="$(sed -n '1{/^[A-Za-z0-9][A-Za-z0-9-]\{0,62\}$/p;}' "$UOS_ROOT/etc/unlook/unit-id" 2>/dev/null || true)"
-[ -n "$unit" ] || uos_die "no valid /etc/unlook/unit-id (first boot not completed?)"
+ETC="$UOS_ROOT/etc/unlook"
+SAVE="$ETC/imager"
+NAME_RE='^[a-z_][a-z0-9_-]{0,31}$'
+HOST_RE='^[A-Za-z0-9][A-Za-z0-9-]{0,62}$'
 
-if [ "$(cat "$UOS_ROOT/etc/hostname" 2>/dev/null)" != "$unit" ]; then
-    printf '%s\n' "$unit" > "$UOS_ROOT/etc/hostname"
+# ---- login user --------------------------------------------------------------------
+want="$(sed -n '1p' "$SAVE/user" 2>/dev/null || true)"
+if [ -n "$want" ] && printf '%s' "$want" | grep -Eq "$NAME_RE"; then
+    cur="$(getent passwd 1000 | cut -d: -f1)"
+    if [ -n "$cur" ] && [ "$cur" != "$want" ] && ! getent passwd "$want" >/dev/null; then
+        usermod -l "$want" -d "/home/$want" -m "$cur"
+        groupmod -n "$want" "$cur" 2>/dev/null || true
+        for f in "$UOS_ROOT"/etc/sudoers.d/*; do
+            [ -f "$f" ] && sed -i "s/^$cur /$want /" "$f"
+        done
+        uos_log notice "login user $cur renamed to $want"
+    fi
+    hash="$(sed -n '1p' "$SAVE/password-hash" 2>/dev/null || true)"
+    if [ -n "$hash" ] && printf '%s' "$hash" | grep -Eq '^\$[0-9a-z]+\$[./A-Za-z0-9$=,-]{16,256}$'; then
+        [ "$(getent shadow "$want" | cut -d: -f2)" = "$hash" ] || usermod -p "$hash" "$want"
+    fi
 fi
-hostname "$unit"
+
+# ---- Wi-Fi connections ---------------------------------------------------------------
+for f in "$ETC"/network/*.nmconnection; do
+    [ -f "$f" ] && [ ! -L "$f" ] || continue
+    [ "$(stat -c %s "$f")" -le 16384 ] || continue
+    dst="$UOS_ROOT/etc/NetworkManager/system-connections/$(basename "$f")"
+    cmp -s "$f" "$dst" 2>/dev/null || install -m 0600 -o root -g root "$f" "$dst"
+done
+
+# ---- timezone / keyboard -----------------------------------------------------------
+tz="$(sed -n '1p' "$SAVE/timezone" 2>/dev/null || true)"
+case "$tz" in *..*) tz="" ;; esac
+if [ -n "$tz" ] && printf '%s' "$tz" | grep -Eq '^[A-Za-z0-9_+-]+(/[A-Za-z0-9_+-]+){0,2}$' &&
+    [ -f "$UOS_ROOT/usr/share/zoneinfo/$tz" ]; then
+    ln -sfn "/usr/share/zoneinfo/$tz" "$UOS_ROOT/etc/localtime"
+    printf '%s\n' "$tz" > "$UOS_ROOT/etc/timezone"
+fi
+if [ -f "$SAVE/keyboard" ] && [ "$(stat -c %s "$SAVE/keyboard")" -le 4096 ] &&
+    ! grep -qv '^[A-Z_]*="[^"$`\\]*"$\|^#\|^$' "$SAVE/keyboard"; then
+    cmp -s "$SAVE/keyboard" "$UOS_ROOT/etc/default/keyboard" || install -m 0644 "$SAVE/keyboard" "$UOS_ROOT/etc/default/keyboard"
+fi
+
+# ---- hostname -------------------------------------------------------------------------
+name="$(sed -n '1p' "$ETC/hostname" 2>/dev/null || true)"
+printf '%s' "$name" | grep -Eq "$HOST_RE" || name=""
+if [ -z "$name" ]; then
+    name="$(sed -n '1p' "$ETC/unit-id" 2>/dev/null || true)"
+    printf '%s' "$name" | grep -Eq "$HOST_RE" || uos_die "no valid /etc/unlook/unit-id (first boot not completed?)"
+fi
+if [ "$(cat "$UOS_ROOT/etc/hostname" 2>/dev/null)" != "$name" ]; then
+    printf '%s\n' "$name" > "$UOS_ROOT/etc/hostname"
+fi
+hostname "$name"
 if grep -q '^127\.0\.1\.1[[:space:]]' "$UOS_ROOT/etc/hosts"; then
-    sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t$unit/" "$UOS_ROOT/etc/hosts"
+    sed -i "s/^127\.0\.1\.1[[:space:]].*/127.0.1.1\t$name/" "$UOS_ROOT/etc/hosts"
 else
-    printf '127.0.1.1\t%s\n' "$unit" >> "$UOS_ROOT/etc/hosts"
+    printf '127.0.1.1\t%s\n' "$name" >> "$UOS_ROOT/etc/hosts"
 fi
-uos_log info "hostname $unit"
+uos_log info "hostname $name"

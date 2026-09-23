@@ -77,50 +77,77 @@ scripts/docker-build.sh bundle      # a newer build = a valid OS update for unit
 
 ## 2. Flash
 
-**SD card / USB stick (Mac):** Raspberry Pi Imager → *Choose OS → Use custom* →
-`deploy/unlook-os-<ver>.img.xz` → **no OS customisation** (Unlook OS ignores it).
-Or from the terminal:
-```bash
-diskutil list                                   # find the card, e.g. /dev/disk4
-diskutil unmountDisk /dev/disk4
-xz -dc deploy/unlook-os-*.img.xz | sudo dd of=/dev/rdisk4 bs=4m
-diskutil eject /dev/disk4
-```
+The build produces a **disk image** (not an ISO): `deploy/unlook-os-<ver>.img.xz`.
+It flashes like any Raspberry Pi OS image.
 
-**CM5 eMMC:** put the carrier in USB-boot mode (nRPIBOOT jumper), connect USB-C,
-run `rpiboot` (Mac: `brew install libusb pkg-config`, then build
-https://github.com/raspberrypi/usbboot with `make`, run `sudo ./rpiboot -d mass-storage-gadget64`),
-then flash the disk that appears exactly as above.
+### 2.1 Raspberry Pi Imager — with OS customisation (recommended)
 
-### 2.1 Before the first boot: access for testing
+Imager only offers its *OS customisation* (user + password, SSH, Wi-Fi, hostname,
+timezone, keyboard) for images from a catalogue, never for "Use custom". The
+build writes that catalogue next to the image: **`deploy/unlook-os.json`**.
 
-SSH is **off** and all passwords are locked by design. For testing, after
-flashing, the FAT volume **`UNLOOKBOOT`** is mounted on the Mac. Create:
+1. Raspberry Pi Imager ≥ 2.0 → **App Options** → **Content repository** →
+   **Use custom file** → select `deploy/unlook-os.json`
+   (or from a terminal: `"/Applications/Raspberry Pi Imager.app/Contents/MacOS/rpi-imager" --repo "$PWD/deploy/unlook-os.json"`).
+2. Device (if asked) **Raspberry Pi 5** (covers CM5) → OS **Unlook OS <ver>** → your SD card / USB / eMMC.
+3. Customisation: set **user + password**, **SSH** (password or your public
+   key), **Wi-Fi** (SSID, password, country), hostname, timezone, keyboard → Write.
 
+What happens on the unit: at the first boot `unlook-imager.service` applies
+exactly what Imager wrote (the same `firstrun.sh` stock Raspberry Pi OS runs),
+then keeps it on the data partition: user, password, SSH, Wi-Fi, timezone,
+keyboard and hostname **survive every OS update**. If no hostname is set in
+Imager the unit is called `UNLK-xxxxxx`.
+
+> Wi-Fi from Imager makes the unit a Wi-Fi **client** (office network). The
+> scanner's own hotspot for the phone uses the same radio: for phone tests keep
+> the default profile (`net_mode: ble`), for bench work on the office Wi-Fi put
+> `net_mode: lan` in the profile.
+
+### 2.2 balenaEtcher or `dd` — no customisation
+
+Flash `deploy/unlook-os-<ver>.img.xz` as is (Etcher: *Flash from file*). Access
+for testing then comes from files on the **`UNLOOKBOOT`** volume, which the Mac
+mounts after flashing:
 ```bash
 mkdir -p /Volumes/UNLOOKBOOT/unlook
 cp ~/.ssh/id_ed25519.pub /Volumes/UNLOOKBOOT/unlook/authorized_keys   # your public key
 touch /Volumes/UNLOOKBOOT/unlook/ssh                                   # enable SSH
-# optional: SDK updates from GitHub need a read-only deploy key of unlook-sdk
-cp ~/unlook-sdk-deploy-key /Volumes/UNLOOKBOOT/unlook/sdk-deploy-key
-# optional: production profile
-cp my_profile.yaml /Volumes/UNLOOKBOOT/unlook/scanner_profile.yaml
 diskutil eject /Volumes/UNLOOKBOOT
 ```
-(No key yet? `ssh-keygen -t ed25519` on the Mac.) The files are consumed and
-deleted at boot (the profile stays for factory resets).
+(Terminal alternative: `diskutil list`, `diskutil unmountDisk /dev/diskN`,
+`xz -dc deploy/unlook-os-*.img.xz | sudo dd of=/dev/rdiskN bs=4m`.)
 
-**Connect** with a USB-C cable (the unit is `10.43.0.1`, the Mac gets an
-address by DHCP) or Ethernet:
+### 2.3 Optional files on `UNLOOKBOOT/unlook/` (both methods)
+
+| File | Effect at boot |
+| --- | --- |
+| `sdk-deploy-key` | read-only GitHub deploy key of `unlook-sdk`: enables SDK updates from GitHub |
+| `scanner_profile.yaml` | production profile (validated by the SDK) |
+| `authorized_keys`, `ssh` | SSH keys / enable SSH (as in 2.2) |
+
+The files are consumed and deleted at boot (the profile stays for factory resets).
+
+### 2.4 CM5 eMMC
+
+Put the carrier in USB-boot mode (nRPIBOOT jumper), connect USB-C, run
+`rpiboot` (Mac: `brew install libusb pkg-config`, build
+https://github.com/raspberrypi/usbboot with `make`, run
+`sudo ./rpiboot -d mass-storage-gadget64`): the eMMC appears as a disk →
+flash it with Imager (2.1) or Etcher (2.2).
+
+### 2.5 Connect
+
+USB-C cable (the unit is `10.43.0.1`, the Mac gets an address by DHCP),
+Ethernet, or the Wi-Fi set in Imager:
 ```bash
-ssh unlook-admin@10.43.0.1
+ssh <user>@10.43.0.1          # <user>: the one set in Imager, else unlook-admin (key only)
+ssh <user>@<IP>               # on Wi-Fi/Ethernet: the IP your router gave it
 ```
-
----
 
 ## 3. Test on the CM5 (checklist)
 
-Run on the unit (`ssh unlook-admin@10.43.0.1`, then `sudo -i`). Tick each one.
+Run on the unit (`ssh <user>@10.43.0.1`, then `sudo -i`). Tick each one.
 
 **Boot, identity, layout**
 ```bash
@@ -173,10 +200,12 @@ unlook-ota status ; unlook-ota history
 
 **OS update A/B + rollback** — copy a newer bundle (build it after the image) to the unit:
 ```bash
-scp deploy/unlook-os-<newer>.raucb unlook-admin@10.43.0.1:/home/unlook-admin/     # on the Mac
-sudo unlook-ota apply os --bundle /home/unlook-admin/unlook-os-<newer>.raucb      # on the unit: installs, reboots
+scp deploy/unlook-os-<newer>.raucb <user>@10.43.0.1:                              # on the Mac
+sudo unlook-ota apply os --bundle "$HOME/unlook-os-<newer>.raucb"                 # on the unit: installs, reboots
 # after the reboot:
 rauc status ; unlook-ota status               # committed, booted slot B
+# Imager settings must survive the update: same user/password/SSH key, Wi-Fi reconnects, same hostname
+id ; nmcli -t -f NAME,DEVICE connection show --active ; hostname
 ```
 Rollback test: apply another newer bundle, and within 2 minutes of the reboot
 run `sudo systemctl stop unlook-stream` → the unit reboots by itself into the

@@ -3,7 +3,8 @@
 # the first-boot user wizard, modem management, swap on eMMC, periodic apt.
 on_chroot << 'EOF'
 set -e
-for p in avahi-daemon rpi-connect rpi-connect-lite modemmanager userconf-pi triggerhappy dphys-swapfile; do
+# userconf-pi stays: Raspberry Pi Imager customisation uses it (its wizard is masked).
+for p in avahi-daemon rpi-connect rpi-connect-lite modemmanager triggerhappy dphys-swapfile; do
     if dpkg -s "$p" >/dev/null 2>&1; then
         DEBIAN_FRONTEND=noninteractive apt-get purge -y "$p"
     fi
