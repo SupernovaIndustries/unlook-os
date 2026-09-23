@@ -103,19 +103,27 @@ DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends libcam
 EOF
 fi
 
-# The driver registers as "mira220-sync": libcamera looks up mira220-sync.json.
-# The Unlook sensors are MONO: point it at the mono tuning of the installed libcamera.
+# As in drivers/mira220-sync/README.md: the driver registers as "mira220-sync".
+# libcamera picks the CamHelper by substring (-> the mira220 helper) but the
+# tuning file by exact name, so mira220-sync.json must exist: link it to
+# mira220.json (the driver exposes Bayer formats) for pisp (CM5) and vc4 (CM4).
 on_chroot << 'EOF'
 set -e
 n=0
 for base in /usr/local/share/libcamera/ipa/rpi /usr/share/libcamera/ipa/rpi; do
     for pipe in pisp vc4; do
         d="$base/$pipe"
-        if [ -f "$d/mira220_mono.json" ]; then
-            ln -sfn mira220_mono.json "$d/mira220-sync.json"
+        if [ -f "$d/mira220.json" ]; then
+            ln -sfn mira220.json "$d/mira220-sync.json"
             n=$((n + 1))
         fi
     done
 done
-echo "mira220-sync -> mira220_mono tuning links: $n"
+echo "mira220-sync -> mira220.json tuning links: $n"
 EOF
+if [ -n "${LIBCAMERA_REPO}" ]; then
+    for pipe in pisp vc4; do
+        [ -e "${R}/usr/local/share/libcamera/ipa/rpi/$pipe/mira220-sync.json" ] ||
+            die "no mira220-sync.json tuning link for $pipe"
+    done
+fi

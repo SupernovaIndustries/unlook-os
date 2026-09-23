@@ -40,8 +40,10 @@ ninja -C "$W/build"
 DESTDIR="$W/pkg" ninja -C "$W/build" install
 
 # Every Mira220 tuning file the tree ships, for both pipelines.
-n="$(find "$W/pkg/usr/local/share/libcamera/ipa/rpi" -name 'mira220_mono.json' | wc -l)"
-[ "$n" -gt 0 ] || die "the build installed no mira220_mono.json tuning file (Unlook sensors are mono)"
+for pipe in pisp vc4; do
+    [ -f "$W/pkg/usr/local/share/libcamera/ipa/rpi/$pipe/mira220.json" ] ||
+        die "the build installed no $pipe/mira220.json tuning file"
+done
 
 mkdir -p "$W/pkg/DEBIAN" "$W/deb/debian"
 printf 'Source: unlook-libcamera\n\nPackage: unlook-libcamera\nArchitecture: arm64\n' > "$W/deb/debian/control"

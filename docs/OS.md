@@ -133,6 +133,15 @@ BlueZ in LE-only mode, `unlook-usb-gadget` (CDC-ACM `/dev/ttyGS0` + ECM `usb0`
 at `10.43.0.1`, DHCP for the host), `unlook-stream` (5555 stream, 5556 UCP),
 `nftables`, persistent `journald`, `unlook-health`.
 
+**Every boot, phone-ready without any login**: `unlook-stream.service` is
+enabled in the image (SDK postinst + stage `03-system`) and started after
+BlueZ, NetworkManager and the USB gadget. Factory profile `net_mode: ble`:
+the unit advertises `Unlook-<id>` over BLE, the phone authenticates with the
+pairing code (label/QR), asks for the hotspot, receives the Wi-Fi credentials
+and connects to the stream protocol (docs/PROVISIONING.md in the SDK). The
+OS drop-in never lets a first-boot failure keep the daemon down (`Wants=`),
+and `StartLimitIntervalSec=0` keeps restarting it for as long as it exits.
+
 ## 6. Updates
 
 ### 6.1 Two channels
@@ -325,7 +334,7 @@ reinstalled with `dpkg -i`, status `rolled_back:health_timeout`.
 | Device tree | `unlook-cam-enable.dtbo` + `mira220-sync.dtbo` (built with `dtc -@`). `config.txt`: `dtoverlay=unlook-cam-enable`, then `dtoverlay=mira220-sync,cam0` (CAM0 master) then `dtoverlay=mira220-sync,trigger-mode=1` (CAM1 slave), from `CAMERA_OVERLAYS` |
 | Camera enable | [`overlays/unlook-cam-enable-overlay.dts`](../overlays/unlook-cam-enable-overlay.dts): `cam0_reg` and `cam1_reg` (the CAM_GPIO regulators: RP1 GPIO 34 on CM5, where `cam1_reg` is an alias of `cam0_reg`; expander GPIO 5 on CM4) are `regulator-always-on` + `regulator-boot-on`. The enable line is driven HIGH when the regulator registers at boot and never released — independent of probe order, runtime PM or the camera overlays. |
 | I2C | camera buses enabled by the overlay (`i2c0if`, `i2c0mux`, `i2c_csi_dsi*`; on CM5 i2c-10 = CAM0, i2c-0 = CAM1 per the bench notes), `dtparam=i2c_arm=on` for AS1170/BMI270, `i2c-dev` loaded at boot so all buses are reachable from user space (`i2ctransfer`) |
-| libcamera | the Raspberry Pi archive build has **no** Mira220 CamHelper → `unlook-libcamera` built from `ams-OSRAM/libcamera` (0.7.1, `/usr/local`, `LIBCAMERA_REPO`/`LIBCAMERA_REF`); the sensors are **mono**: the stage links `mira220-sync.json` → `mira220_mono.json` in `…/ipa/rpi/{pisp,vc4}` (libcamera looks the tuning up by driver name) |
+| libcamera | the Raspberry Pi archive build has **no** Mira220 CamHelper → `unlook-libcamera` built from `ams-OSRAM/libcamera` (0.7.1, `/usr/local`, `LIBCAMERA_REPO`/`LIBCAMERA_REF`); as in `drivers/mira220-sync/README.md`: libcamera picks the CamHelper by substring (`mira220-sync` → `mira220` helper) but the tuning by exact name, so the stage links `mira220-sync.json` → `mira220.json` in `/usr/local/share/libcamera/ipa/rpi/{pisp,vc4}` (the driver exposes Bayer formats; the build fails if either link is missing) |
 | Wiring | JST sync cable J6 (master) ↔ J4 (slave) carrying ILLUM_TRIGGER + FRAME_TRIGG; sync switches in position 2 |
 
 Operational rule from the bench: the slave must be streaming **before** the

@@ -135,6 +135,21 @@ Today `unlook-stream` runs as root (nmcli hotspot, BlueZ GATT registration,
 - Then `ProtectSystem=strict`, `ReadWritePaths=/var/lib/unlook /etc/unlook`,
   `CapabilityBoundingSet=` empty, `SystemCallFilter=@system-service`.
 
+## 5b. Control plane up even without cameras (P1)
+
+Unlook OS starts `unlook-stream` at every boot so the phone controls the
+scanner directly (BLE pairing → hotspot → stream/UCP). Today the unit restarts
+the daemon every 3 s "until the cameras answer": while a camera is missing or
+misbehaving, BLE, the hotspot and UCP disappear with it, and the phone cannot
+even see the fault. Bring BLE provisioning, the hotspot policy, the stream
+server and UCP up **first**, then initialise the cameras; on a camera failure
+stay up, report `status:…;camera=error:<reason>` / `EV camera_error:<reason>`,
+refuse `scan`-type commands with `ERR camera_unavailable`, and retry the camera
+init in the background. `ping` must answer in both cases (the OS health check
+uses it), so the health check needs an extra signal to know the cameras are
+fine: add `status` field `camera=ok` and the OS will require it before
+committing an OS update.
+
 ## 6. Camera stack the SDK runs on (P0, verify in the SDK)
 
 The OS provides (docs/OS.md §10): `mira220-sync.ko` (CAM0 master,
