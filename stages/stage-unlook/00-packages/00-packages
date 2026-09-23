@@ -3,6 +3,7 @@ dnsmasq-base
 wpasupplicant
 bluez
 v4l-utils
+netcat-openbsd
 libyaml-cpp-dev
 nlohmann-json3-dev
 libi2c-dev

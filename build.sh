@@ -162,7 +162,14 @@ KEYBOARD_LAYOUT="$KEYBOARD_LAYOUT"
 TIMEZONE_DEFAULT=$TIMEZONE_DEFAULT
 WPA_COUNTRY=$WPA_COUNTRY
 STAGE_LIST="stage0 stage1 stage2 stage-unlook"
+CLEAN=1
 EOF
+    # Work tree on a Linux filesystem when the checkout is not one (Docker Desktop
+    # bind mounts cannot hold device nodes / root ownership).
+    if [ -n "${PIGEN_WORK_DIR:-}" ]; then
+        require_match PIGEN_WORK_DIR "$PIGEN_WORK_DIR" '/[A-Za-z0-9._/-]+'
+        echo "WORK_DIR=$PIGEN_WORK_DIR" >> "$PIGEN/config"
+    fi
     if [ "$NATIVE" -eq 1 ]; then
         (cd "$PIGEN" && ./build.sh)
     else

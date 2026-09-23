@@ -34,7 +34,7 @@ grep -rqi mira220 "$W/src/src/ipa/rpi" || die "no Mira220 support in src/ipa/rpi
 
 meson setup "$W/build" "$W/src" --prefix=/usr/local --buildtype=release \
     -Dpipelines=rpi/vc4,rpi/pisp -Dipas=rpi/vc4,rpi/pisp \
-    -Dv4l2=true -Dcam=disabled -Dqcam=disabled -Dgstreamer=disabled -Dpycamera=disabled \
+    -Dcam=disabled -Dqcam=disabled -Dgstreamer=disabled -Dpycamera=disabled \
     -Dlc-compliance=disabled -Dtest=false -Ddocumentation=disabled -Dtracing=disabled
 ninja -C "$W/build"
 DESTDIR="$W/pkg" ninja -C "$W/build" install

@@ -30,10 +30,12 @@ cp "$D/rauc-ca.pem" "$D/rauc-keyring.pem"
 
 G="$(mktemp -d)"
 trap 'rm -rf "$G"' EXIT
-GNUPGHOME="$G" gpg --batch --quiet --passphrase '' \
+# No agent / pinentry in the builder container: loopback with an empty passphrase.
+GNUPGHOME="$G" gpg --batch --quiet --pinentry-mode loopback --passphrase '' \
     --quick-gen-key "Unlook DEV apt repository <dev-apt@supernovaindustries.invalid>" ed25519 sign 3y
 GNUPGHOME="$G" gpg --batch --export > "$D/apt-archive-keyring.gpg"
-GNUPGHOME="$G" gpg --batch --armor --export-secret-keys > "$D/apt-signing.asc"
+GNUPGHOME="$G" gpg --batch --pinentry-mode loopback --passphrase '' \
+    --armor --export-secret-keys > "$D/apt-signing.asc"
 chmod 0644 "$D/rauc-keyring.pem" "$D/apt-archive-keyring.gpg"
 echo "dev keys in $D"
 echo "  export RAUC_SIGNING_CERT=$D/rauc-signing.crt RAUC_SIGNING_KEY=$D/rauc-signing.key"

@@ -1,4 +1,5 @@
-#!/bin/sh
+ls "$TOP"/debs/libopencv-dev_*_arm64.deb >/dev/null 2>&1 ||
+    die "no libopencv-dev package produced (CPack package names: see the log above)"#!/bin/sh
 # OpenCV >= 4.7 with contrib/aruco for Raspberry Pi OS bookworm (Debian ships
 # 4.6.0, the SDK calibration engine needs the 4.7+ aruco API).
 #
@@ -44,7 +45,12 @@ cmake --build "$W/build" -j"$(nproc)"
 (cd "$W/build" && cpack -G DEB)
 mkdir -p "$TOP/debs"
 for d in "$W"/build/*.deb; do
-    log "$(dpkg-deb -f "$d" Package) $(dpkg-deb -f "$d" Version)"
-    cp "$d" "$TOP/debs/"
+    # Canonical Debian file names (<package>_<version>_<arch>.deb) whatever CPack chose.
+    pkg="$(dpkg-deb -f "$d" Package)"
+    ver="$(dpkg-deb -f "$d" Version)"
+    arch="$(dpkg-deb -f "$d" Architecture)"
+    log "$pkg $ver $arch"
+    cp "$d" "$TOP/debs/${pkg}_${ver}_${arch}.deb"
 done
-ls "$TOP"/debs/ | grep -q 'dev' || die "no OpenCV development package produced"
+ls "$TOP"/debs/libopencv-dev_*_arm64.deb >/dev/null 2>&1 ||
+    die "no libopencv-dev package produced (package names are in the log above)"

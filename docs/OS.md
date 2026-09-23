@@ -42,9 +42,12 @@ update channel for the SDK alone through a signed apt repository.
 
 ## 2. Build
 
-Requirements: an arm64 Linux host (the Pi 5 CI runner is the reference) with
-Docker, git, and for the bundle `rauc`; or x86-64 with `binfmt`/qemu-user for
-pi-gen (slower).
+**Recommended: `scripts/docker-build.sh all`** — everything runs in the
+`unlook-os-builder` container (docker/Dockerfile, Debian bookworm arm64): the
+host needs only Docker + git; an Apple Silicon Mac builds natively. Step-by-step
+commands, flashing and the CM5 test checklist are in the README. pi-gen is
+pinned to tag `2026-09-15-raspios-bookworm-arm64` (its `arm64` branch is now
+trixie). The individual scripts below are what the container runs:
 
 ```bash
 git clone --recurse-submodules <gitlab>/unlook/unlook-os.git && cd unlook-os
