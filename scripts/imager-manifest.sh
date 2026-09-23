@@ -8,6 +8,9 @@
 #
 # Without a base URL the entry points at the local file (file://…), so run it on
 # the machine that will flash (scripts/docker-build.sh does it on the host).
+# Under WSL the URL is a Windows one: a /mnt/c/... directory becomes file:///C:/...,
+# anything else \\wsl.localhost\<distro>\... (copying the image to a Windows
+# folder and running this script there is the most robust choice).
 # Open it in Imager: App Options -> Content repository -> Use custom file, or
 #   rpi-imager --repo deploy/unlook-os.json
 set -eu
@@ -40,6 +43,17 @@ done
 if [ -n "$BASE_URL" ]; then
     printf '%s' "$BASE_URL" | grep -Eq '^https://[A-Za-z0-9.:/_~-]+$' || { echo "base URL must be https://…" >&2; exit 1; }
     URL="${BASE_URL%/}/$IMG"
+elif grep -qi microsoft /proc/version 2>/dev/null; then
+    # WSL: Raspberry Pi Imager runs on Windows and needs a Windows path.
+    case "$D" in
+        /mnt/[a-z]/*)
+            drive="$(printf '%s' "$D" | cut -c6 | tr 'a-z' 'A-Z')"
+            rest="$(printf '%s' "$D" | cut -c7-)"
+            URL="file:///$drive:$(url_path "$rest/$IMG")" ;;
+        *)
+            # Inside the WSL file system: \\wsl.localhost\<distro>\... from Windows.
+            URL="file://wsl.localhost/$(url_path "${WSL_DISTRO_NAME:-Ubuntu}$D/$IMG")" ;;
+    esac
 else
     URL="file://$(url_path "$D/$IMG")"
 fi
