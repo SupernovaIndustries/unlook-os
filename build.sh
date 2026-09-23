@@ -13,6 +13,7 @@
 set -eu
 
 TOP="$(cd "$(dirname "$0")" && pwd)"
+# shellcheck source=scripts/lib.sh
 . "$TOP/scripts/lib.sh"
 
 ACTION="${1:-all}"
@@ -85,6 +86,9 @@ check_inputs() {
 build_rootfs() {
     check_inputs
     PIGEN="$WORK/pi-gen"
+    # pi-gen itself refuses a base path with spaces; scripts/docker-build.sh
+    # avoids that by mounting the checkout at /work.
+    case "$PIGEN" in *' '*) die "pi-gen cannot run from a path with spaces ($PIGEN): use scripts/docker-build.sh" ;; esac
     if [ ! -d "$PIGEN/.git" ]; then
         git clone --quiet "$PIGEN_REPO" "$PIGEN"
     fi

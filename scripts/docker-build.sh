@@ -13,6 +13,8 @@
 # Everything runs inside the `unlook-os-builder` container (docker/Dockerfile):
 # the host needs only Docker and git. pi-gen's work tree lives in the Docker
 # volume `unlook-pigen-work` (a Linux filesystem: device nodes, ownership).
+# The checkout is mounted at /work, so the host path may be anything (spaces
+# included, e.g. /Volumes/Macintosh SSD - Data/...).
 set -eu
 TOP="$(cd "$(dirname "$0")/.." && pwd)"
 STEP="${1:-all}"
@@ -23,7 +25,6 @@ docker info >/dev/null 2>&1 || { echo "Docker is not running." >&2; exit 1; }
 for f in unlook-sdk/CMakeLists.txt drivers/mira220-sync/driver/Makefile; do
     [ -f "$TOP/$f" ] || { echo "missing $f: run  git submodule update --init --recursive" >&2; exit 1; }
 done
-case "$TOP" in *' '*) echo "the checkout path must not contain spaces: $TOP" >&2; exit 1 ;; esac
 case "$(uname -m)" in
     arm64 | aarch64) ;;
     *) echo "note: $(uname -m) host -- the arm64 builder runs emulated (much slower)" >&2 ;;

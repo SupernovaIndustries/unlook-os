@@ -31,7 +31,9 @@ same commands work through emulation but take hours).
    ```
    If `git clone` asks for a password, log in with a GitHub token or set up
    `gh auth login` (GitHub CLI: `brew install gh`).
-3. The checkout path must not contain spaces.
+3. Any checkout path works, spaces included (e.g. an external volume such as
+   `/Volumes/Macintosh SSD - Data/...`): the build runs inside the container
+   at `/work`.
 
 ### 1.2 Get the sources
 

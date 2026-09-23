@@ -16,9 +16,21 @@ D="${1:-$TOP/deploy}"
 BASE_URL="${2:-}"
 D="$(cd "$D" && pwd)"
 
+# shellcheck disable=SC2012 # newest by mtime; names are our own <img>.imageinfo
 info="$(ls -t "$D"/*.imageinfo 2>/dev/null | head -n 1)"
 [ -n "$info" ] || { echo "no *.imageinfo in $D (build the image first)" >&2; exit 1; }
 get() { sed -n "s/^$1=//p" "$info" | head -n 1; }
+# RFC 3986 path encoding (spaces, non-ASCII, quotes...): the result is a valid
+# URL and needs no JSON escaping.
+url_path() {
+    printf '%s' "$1" | od -An -v -tx1 | awk '
+        BEGIN { for (i = 0; i < 256; i++) n[sprintf("%02x", i)] = i
+                safe = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789/._~-" }
+        { for (f = 1; f <= NF; f++) {
+            c = n[$f]
+            if (c > 32 && c < 127 && index(safe, sprintf("%c", c))) printf "%c", c
+            else printf "%%%s", toupper($f) } }'
+}
 IMG="$(get image)"
 VER="$(get version)"
 for v in "$IMG" "$VER" "$(get extract_size)" "$(get extract_sha256)" "$(get image_download_size)" "$(get image_download_sha256)"; do
@@ -29,7 +41,7 @@ if [ -n "$BASE_URL" ]; then
     printf '%s' "$BASE_URL" | grep -Eq '^https://[A-Za-z0-9.:/_~-]+$' || { echo "base URL must be https://…" >&2; exit 1; }
     URL="${BASE_URL%/}/$IMG"
 else
-    URL="file://$D/$IMG"
+    URL="file://$(url_path "$D/$IMG")"
 fi
 
 OUT="$D/unlook-os.json"

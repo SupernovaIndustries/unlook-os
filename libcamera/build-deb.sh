@@ -32,7 +32,11 @@ log "libcamera $UPV @ $SHA -> unlook-libcamera $DEBV"
 # The Mira220 support must actually be in the tree we package.
 grep -rqi mira220 "$W/src/src/ipa/rpi" || die "no Mira220 support in src/ipa/rpi of $LIBCAMERA_REF"
 
+# libcamera builds with werror; GCC 12 (bookworm) raises a false -Wrestrict on
+# std::string inlining (GCC bug 105651) in src/apps/common, which is always built
+# (ipa-verify). Only that diagnostic is downgraded: every other warning stays fatal.
 meson setup "$W/build" "$W/src" --prefix=/usr/local --buildtype=release \
+    -Dcpp_args=-Wno-error=restrict \
     -Dpipelines=rpi/vc4,rpi/pisp -Dipas=rpi/vc4,rpi/pisp \
     -Dcam=disabled -Dqcam=disabled -Dgstreamer=disabled -Dpycamera=disabled \
     -Dlc-compliance=disabled -Dtest=false -Ddocumentation=disabled -Dtracing=disabled
@@ -63,6 +67,7 @@ Description: libcamera with ams Mira220 support for Unlook OS
  Built from $LIBCAMERA_REPO at $SHA into /usr/local
  (rpi/pisp + rpi/vc4 pipelines, Mira220 camera helper and tuning).
 EOF
+# shellcheck disable=SC2016 # $1 is expanded by the postinst, not here
 printf '#!/bin/sh\nset -e\n[ "$1" = configure ] && ldconfig\nexit 0\n' > "$W/pkg/DEBIAN/postinst"
 chmod 0755 "$W/pkg/DEBIAN/postinst"
 mkdir -p "$TOP/debs"

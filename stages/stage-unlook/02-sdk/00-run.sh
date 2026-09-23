@@ -87,6 +87,8 @@ for f in /usr/bin/unlook_stream /usr/lib/systemd/system/unlook-stream.service \
          /etc/bluetooth/main.conf.d/unlook.conf; do
     [ -e "${R}${f}" ] || die "SDK package did not install ${f}"
 done
-# The daemon must start at every boot (enabled by the SDK postinst).
-[ -e "${R}/etc/systemd/system/multi-user.target.wants/unlook-stream.service" ] ||
+# The daemon must start at every boot (enabled by the SDK postinst). The wants/
+# entry is a symlink to an absolute /lib/... path, dangling outside the chroot:
+# test the link itself (-L), not its target (-e).
+[ -L "${R}/etc/systemd/system/multi-user.target.wants/unlook-stream.service" ] ||
     die "unlook-stream.service is not enabled"

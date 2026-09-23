@@ -2,6 +2,7 @@
 /deploy/
 /debs/
 /keys/dev/
+/keys/dev.tmp.*/
 /keys/ci/
 *.raucb
 *.img

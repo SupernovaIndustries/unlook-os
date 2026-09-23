@@ -11,6 +11,8 @@ RUN echo 'deb http://deb.debian.org/debian bookworm-backports main' > /etc/apt/s
     # pi-gen (its `depends` file)
     quilt parted coreutils qemu-user-static debootstrap zerofree zip dosfstools e2fsprogs \
     libcap2-bin libarchive-tools grep rsync xz-utils curl xxd file git kmod bc gpg pigz arch-test \
+    # gpg-agent: required by gpg to generate keys (scripts/dev-keys.sh)
+    gpg-agent \
     ca-certificates \
     # image assembly + RAUC bundle + dev keys
     mtools fdisk rauc squashfs-tools openssl \

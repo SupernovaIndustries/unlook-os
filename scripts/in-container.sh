@@ -8,8 +8,9 @@ cd /work
 STEP="${1:-all}"
 
 step_debs() {
-    if [ "${KEYS_DIR:-keys/dev}" = keys/dev ] && [ ! -s keys/dev/rauc-keyring.pem ]; then
-        log "creating development keys (keys/dev)"
+    if [ "${KEYS_DIR:-keys/dev}" = keys/dev ]; then
+        # Creates keys/dev once; fails early (not after the builds) if it is incomplete.
+        log "development keys (keys/dev)"
         scripts/dev-keys.sh
     fi
     apt-get update -qq

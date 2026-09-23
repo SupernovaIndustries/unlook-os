@@ -31,19 +31,29 @@ BASE="$OUT/${IMG_NAME}-${V}"
 for f in "$BASE.rootfs.ext4" "$BASE.bootfs.vfat"; do [ -s "$f" ] || die "missing $f (build.sh image)"; done
 
 W="$(mktemp -d)"
-trap 'rm -rf "$W"' EXIT
+V_CONF="$(mktemp)"
+trap 'rm -rf "$W" "$V_CONF"' EXIT
 cp "$BASE.rootfs.ext4" "$W/rootfs.ext4"
 cp "$BASE.bootfs.vfat" "$W/bootfs.vfat"
 install -m 0755 "$TOP/rauc/hook.sh" "$W/hook.sh"
 sed -e "s|@RAUC_COMPATIBLE@|$RAUC_COMPATIBLE|" -e "s|@VERSION@|$V|g" -e "s|@BUILD@|$BUILD|" \
     "$TOP/rauc/manifest.raucm.in" > "$W/manifest.raucm"
 
+# Verify with the unit's own keyring policy: without a config rauc checks the
+# default purpose (smimesign) and rejects our codeSigning certificate. The
+# purpose is read from the system.conf the image ships, so the two cannot drift.
+UNIT_CONF="$TOP/stages/stage-unlook/overlay/etc/rauc/system.conf"
+PURPOSE="$(sed -n 's/^check-purpose=//p' "$UNIT_CONF" | head -n 1)"
+require_match check-purpose "$PURPOSE" 'codesign|smimesign|any'
+printf '[system]\ncompatible=%s\nbootloader=noop\n\n[keyring]\npath=%s\ncheck-purpose=%s\n' \
+    "$RAUC_COMPATIBLE" "$KEYRING" "$PURPOSE" > "$V_CONF"
+
 B="$BASE.raucb"
 rm -f "$B"
 # --keyring: rauc verifies the fresh signature against the unit's trust anchor,
 # so a bundle signed with the wrong key never leaves the build.
-rauc bundle --cert="$CERT" --key="$KEY" --keyring="$KEYRING" "$W" "$B"
-rauc info --keyring="$KEYRING" "$B" >/dev/null
+rauc --conf="$V_CONF" bundle --cert="$CERT" --key="$KEY" --keyring="$KEYRING" "$W" "$B"
+rauc --conf="$V_CONF" info --keyring="$KEYRING" "$B" >/dev/null
 SUM="$(sha256sum "$B" | cut -d' ' -f1)"
 printf 'version=%s\nbundle=%s\nsha256=%s\n' "$V" "$(basename "$B")" "$SUM" > "$OUT/latest"
 log "bundle: $B"

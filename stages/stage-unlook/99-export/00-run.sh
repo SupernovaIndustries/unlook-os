@@ -13,6 +13,17 @@ if command -v hardlink >/dev/null; then hardlink -t /usr/share/doc >/dev/null; f
 apt-get clean
 EOF
 
+# on_chroot leaves proc, dev, dev/pts, sys, run and tmp mounted in the rootfs
+# until the stage ends (pi-gen's own export copies with rsync -x). Unmount them
+# before cleaning and packing, or the tarball would carry the build host's.
+unmount "${R}"
+if awk -v r="$(realpath "${R}")/" 'index($2, r) == 1' /proc/mounts | grep -q .; then
+    die "file systems still mounted under ${R}"
+fi
+
+# pi-gen creates DEPLOY_DIR only in export-image, which this stage replaces.
+mkdir -p "${DEPLOY_DIR}"
+
 # Package manifest (SBOM input, CRA technical file) before the lists go.
 dpkg-query --admindir="${R}/var/lib/dpkg" -W -f='${Package}\t${Version}\t${Architecture}\n' |
     sort > "${DEPLOY_DIR}/${IMG_NAME}-packages.tsv"
@@ -29,8 +40,13 @@ find "${R}/var/log" -type f -delete
 rm -f "${R}/root/.bash_history" "${R}/home/${ADMIN_USER}/.bash_history"
 
 # Guards: nothing may ship that would open the box.
-[ ! -e "${R}/etc/systemd/system/multi-user.target.wants/ssh.service" ] || die "ssh.service is enabled"
-[ ! -e "${R}/etc/systemd/system/sockets.target.wants/ssh.socket" ] || die "ssh.socket is enabled"
+# wants/ entries are symlinks to absolute /lib/... paths, dangling outside the
+# chroot: -e alone would never see them. Test the link (-L) or a file (-e).
+for u in multi-user.target.wants/ssh.service sockets.target.wants/ssh.socket; do
+    if [ -L "${R}/etc/systemd/system/$u" ] || [ -e "${R}/etc/systemd/system/$u" ]; then
+        die "${u##*/} is enabled"
+    fi
+done
 [ ! -e "${R}/usr/sbin/avahi-daemon" ] || die "avahi-daemon is installed"
 grep -q "^${ADMIN_USER}:!" "${R}/etc/shadow" || die "${ADMIN_USER} password is not locked"
 grep -q '^root:[!*]' "${R}/etc/shadow" || die "root password is not locked"

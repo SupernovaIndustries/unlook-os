@@ -1,0 +1,2 @@
+# Follow `. lib.sh` (paths come from the "# shellcheck source=" directives).
+external-sources=true
