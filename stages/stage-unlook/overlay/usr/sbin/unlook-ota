@@ -31,7 +31,11 @@ UOS_TAG=unlook-ota
 
 umask 022
 VER_RE='[0-9A-Za-z.+~-]{1,64}'
-SDK_PKG="$(uos_conf SDK_PACKAGE libunlook-sdk-dev '[a-z0-9][a-z0-9.+-]{1,63}')"
+SDK_PKG="$(uos_conf SDK_PACKAGE libunlook-sdk '[a-z0-9][a-z0-9.+-]{1,63}')"
+# The -dev package (headers + build deps) exists on units that build from GitHub;
+# it must always carry the same version as the runtime package.
+SDK_DEV_PKG="${SDK_PKG}-dev"
+SERVICE_GROUP="$(uos_conf SERVICE_USER unlook '[a-z][a-z0-9-]{0,30}')"
 SDK_SRC="$(uos_conf SDK_OTA_SOURCE off 'github|apt|off')"
 GIT_URL="$(uos_conf SDK_GIT_URL '' 'git@github\.com:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git')"
 GIT_BRANCH="$(uos_conf SDK_GIT_BRANCH main '[A-Za-z0-9._/-]{1,64}')"
@@ -57,9 +61,33 @@ usage() {
     exit 64
 }
 
-[ "$(id -u)" -eq 0 ] || uos_die "must run as root"
-mkdir -p "$UOS_RUN" "$UOS_STATE"
-chmod 0700 "$UOS_STATE"
+# ---- unprivileged callers (the daemon when it runs as the service user) --------
+# Only the three protocol operations are possible, each through a fixed systemd
+# unit that polkit lets the service user start (49-unlook.rules); nothing the
+# caller passes reaches a privileged process.
+if [ "$(id -u)" -ne 0 ]; then
+    case "${1:-} ${2:-} ${3:-}" in
+        "check --machine ")
+            systemctl start unlook-ota-check.service >/dev/null 2>&1 || { echo "ota_check_error:unavailable"; exit 1; }
+            sed -n '1{/^ota_check:[0-9A-Za-z.+~:-]*$/p;}' "$UOS_RUN/check"
+            exit 0 ;;
+        "apply sdk " | "apply os ")
+            if systemctl is-active --quiet unlook-ota-apply@sdk.service unlook-ota-apply@os.service; then
+                echo "ota_busy"
+                exit 75
+            fi
+            systemctl start --no-block "unlook-ota-apply@$2.service" || exit 1
+            echo "ota_apply_queued:$2"
+            exit 0 ;;
+        "status --machine " | "status  ") ;; # read-only, below
+        *) uos_die "must run as root" ;;
+    esac
+fi
+if [ "$(id -u)" -eq 0 ]; then
+    mkdir -p "$UOS_RUN" "$UOS_STATE"
+    chmod 0750 "$UOS_STATE"
+    chgrp "$SERVICE_GROUP" "$UOS_STATE" 2>/dev/null || true
+fi
 
 # ---- helpers ------------------------------------------------------------------
 
@@ -195,8 +223,11 @@ sdk_from_apt() {
     fi
     uos_status installing sdk 30 "$NEW" -
     # apt verifies the repository signature (Signed-By keyring); no --allow-unauthenticated anywhere.
+    pkgs="$SDK_PKG=$NEW"
+    if dpkg-query -W "$SDK_DEV_PKG" >/dev/null 2>&1; then pkgs="$pkgs $SDK_DEV_PKG=$NEW"; fi
+    # shellcheck disable=SC2086 # two fixed package=version words
     if ! DEBIAN_FRONTEND=noninteractive apt_unlook install -y --only-upgrade --no-install-recommends \
-        -o Dpkg::Options::=--force-confold "$SDK_PKG=$NEW" >/dev/null 2>&1; then
+        -o Dpkg::Options::=--force-confold $pkgs >/dev/null 2>&1; then
         uos_status failed sdk 0 "$NEW" install_failed
         return 1
     fi
@@ -256,8 +287,11 @@ sdk_from_github() {
     jobs=$(($(nproc) / 2))
     [ "$jobs" -ge 1 ] || jobs=1
     uos_log notice "building SDK $NEW from $GIT_URL@$GIT_BRANCH"
-    uos_status building sdk 20 "$NEW" -
-    # Same flags as scripts/build-sdk-deb.sh (the CI build).
+    # The SDK's status parser knows no "building" state: the build is reported
+    # as `installing` 20..60 %, the package installation as `installing` 70 %.
+    uos_status installing sdk 20 "$NEW" -
+    # Same flags as scripts/build-sdk-deb.sh (the CI build); CPack makes the
+    # runtime and the -dev package (DEB-DEFAULT names).
     rm -rf "$BUILD_DIR"
     if ! {
         nice -n 10 cmake -S "$SRC_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr \
@@ -269,27 +303,41 @@ sdk_from_github() {
         rm -rf "$BUILD_DIR"
         return 1
     fi
-    NEW_DEB="$(ls "$BUILD_DIR/${SDK_PKG}_${NEW}_arm64.deb" 2>/dev/null || true)"
-    if [ -z "$NEW_DEB" ]; then
-        uos_status failed sdk 0 "$NEW" build_failed
-        return 1
-    fi
-    # Keep it next to the previous one: the rollback source for the NEXT update.
-    cp -f "$NEW_DEB" "$DEB_CACHE/"
-    NEW_DEB="$DEB_CACHE/$(basename "$NEW_DEB")"
+    uos_status installing sdk 60 "$NEW" -
+    [ -f "$BUILD_DIR/${SDK_PKG}_${NEW}_arm64.deb" ] || { uos_status failed sdk 0 "$NEW" build_failed; return 1; }
+    # Keep them next to the previous ones: the rollback source for the NEXT update.
+    NEW_DEB=""
+    for p in "$SDK_PKG" "$SDK_DEV_PKG"; do
+        f="$BUILD_DIR/${p}_${NEW}_arm64.deb"
+        [ -f "$f" ] || continue
+        # The -dev package only where it is installed (it pulls the build deps).
+        if [ "$p" = "$SDK_DEV_PKG" ] && ! dpkg-query -W "$SDK_DEV_PKG" >/dev/null 2>&1; then continue; fi
+        cp -f "$f" "$DEB_CACHE/"
+        NEW_DEB="$NEW_DEB $DEB_CACHE/$(basename "$f")"
+    done
     rm -rf "$BUILD_DIR"
     uos_status installing sdk 70 "$NEW" -
-    if ! DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold "$NEW_DEB" >> "$BUILD_LOG" 2>&1; then
+    # shellcheck disable=SC2086 # NEW_DEB: our own list of cache paths
+    if ! DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold $NEW_DEB >> "$BUILD_LOG" 2>&1; then
         uos_status failed sdk 0 "$NEW" install_failed
         restore_prev_deb || true
         return 1
     fi
 }
 
+# Reinstall the previous runtime (+ -dev when installed) .deb from the apt cache.
 restore_prev_deb() {
-    deb="$(ls "$DEB_CACHE/${SDK_PKG}_$(printf '%s' "$prev" | sed 's/:/%3a/')"_*.deb 2>/dev/null | head -n 1)"
-    [ -n "$deb" ] || return 1
-    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold "$deb" >/dev/null 2>&1
+    v="$(printf '%s' "$prev" | sed 's/:/%3a/')"
+    debs=""
+    for p in "$SDK_PKG" "$SDK_DEV_PKG"; do
+        d="$(ls "$DEB_CACHE/${p}_${v}_"*.deb 2>/dev/null | head -n 1)"
+        if [ -n "$d" ]; then
+            if [ "$p" = "$SDK_PKG" ] || dpkg-query -W "$SDK_DEV_PKG" >/dev/null 2>&1; then debs="$debs $d"; fi
+        fi
+    done
+    case "$debs" in *"$SDK_PKG"_*) ;; *) return 1 ;; esac
+    # shellcheck disable=SC2086 # our own list of cache paths
+    DEBIAN_FRONTEND=noninteractive dpkg -i --force-confold $debs >/dev/null 2>&1
 }
 
 run_sdk() {
@@ -357,19 +405,19 @@ run_os() {
             need=$(((BUNDLE_MAX / 1024) + 262144))
             free="$(df -Pk "$UOS_STATE" | awk 'NR==2 {print $4}')"
             if [ "$free" -lt "$need" ]; then
-                uos_status failed os 0 "${OS_AVAIL:-?}" no_space
+                uos_status failed os 0 "${OS_AVAIL:--}" no_space
                 return 1
             fi
-            uos_status downloading os 10 "${OS_AVAIL:-?}" -
+            uos_status downloading os 10 "${OS_AVAIL:--}" -
             if ! curl -fsS --proto =https --tlsv1.2 --max-filesize "$BUNDLE_MAX" --retry 3 \
                 -o "$file" "$src"; then
                 rm -f "$file"
-                uos_status failed os 0 "${OS_AVAIL:-?}" download_failed
+                uos_status failed os 0 "${OS_AVAIL:--}" download_failed
                 return 1
             fi
             if [ -n "${OS_SHA256:-}" ] && [ "$(sha256sum "$file" | cut -d' ' -f1)" != "$OS_SHA256" ]; then
                 rm -f "$file"
-                uos_status failed os 0 "${OS_AVAIL:-?}" checksum_mismatch
+                uos_status failed os 0 "${OS_AVAIL:--}" checksum_mismatch
                 return 1
             fi
             ;;
@@ -555,6 +603,10 @@ case "${1:-}" in
     history) cat "$UOS_STATE/history" 2>/dev/null || true ;;
     set-sdk-key) install_sdk_key "${2:?usage: unlook-ota set-sdk-key <file>}" ;;
     provision) cmd_provision ;;
+    _check-to-file)
+        cmd_check --machine > "$UOS_RUN/check.new"
+        chmod 0644 "$UOS_RUN/check.new"
+        mv -f "$UOS_RUN/check.new" "$UOS_RUN/check" ;;
     _run-request) cmd_run_request "${2:-}" ;;
     *) usage ;;
 esac

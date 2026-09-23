@@ -15,7 +15,7 @@ eq() { if [ "$2" = "$3" ]; then ok "$1"; else ko "$1 (expected '$3', got '$2')";
 
 new_root() {
     T="$(mktemp -d)"
-    mkdir -p "$T/proc/device-tree/chosen/bootloader" "$T/cfg" "$T/etc/unlook-os" "$T/var/lib/unlook/ota" "$T/run/unlook/ota"
+    mkdir -p "$T/proc/device-tree/chosen/bootloader" "$T/cfg" "$T/etc/unlook-os" "$T/var/lib/unlook-ota" "$T/run/unlook/ota"
     printf '[all]\ntryboot_a_b=1\nboot_partition=2\n[tryboot]\nboot_partition=3\n' > "$T/cfg/autoboot.txt"
     printf 'BOOT_A_PARTNUM=2\nBOOT_B_PARTNUM=3\n' > "$T/etc/unlook-os/os.conf"
     boot A 0
@@ -49,7 +49,7 @@ eq "tryboot B healthy: default p3" "$(default_part)" 3
 eq "tryboot B healthy: tryboot p2" "$(tryboot_part)" 2
 eq "tryboot B healthy: primary B" "$(be get-primary)" B
 [ -f "$T/run/unlook/ota/committed" ] && ok "commit marker written" || ko "commit marker written"
-[ ! -f "$T/var/lib/unlook/ota/boot/pending" ] && ok "pending cleared" || ko "pending cleared"
+[ ! -f "$T/var/lib/unlook-ota/boot/pending" ] && ok "pending cleared" || ko "pending cleared"
 
 boot B 0
 be set-state B good

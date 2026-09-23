@@ -1,0 +1,24 @@
+#!/bin/sh
+# unlook-perms -- ExecStartPre=+ of unlook-stream when the daemon runs as the
+# service user (SDK_DAEMON_USER): gives it read access to what it needs and
+# nothing more. /var/lib/unlook itself is chowned by systemd (StateDirectory).
+#   /etc/unlook/audit.key   owner <user>, 0400 (HMAC key of the audit trail)
+#   /var/lib/unlook-ota     root:<user> 0750 (OS update state: read-only for it)
+set -eu
+UOS_TAG=unlook-perms
+# shellcheck source=common.sh
+. "${UNLOOK_OS_LIBDIR:-/usr/lib/unlook-os}/common.sh"
+
+user="$(uos_conf SDK_DAEMON_USER root '[a-z][a-z0-9-]{0,30}')"
+[ "$user" = root ] && exit 0
+id -u "$user" >/dev/null 2>&1 || uos_die "daemon user $user does not exist"
+
+key="$UOS_ROOT/etc/unlook/audit.key"
+if [ -f "$key" ] && [ ! -L "$key" ]; then
+    chown "$user:$user" "$key"
+    chmod 0400 "$key"
+fi
+if [ -d "$UOS_STATE" ]; then
+    chown "root:$user" "$UOS_STATE"
+    chmod 0750 "$UOS_STATE"
+fi

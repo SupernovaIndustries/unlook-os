@@ -18,7 +18,8 @@ UNLOOK_APT_HOST="${UNLOOK_APT_HOST%%:*}"
 FW_TCP_PORTS_NFT="$(printf '%s' "${FW_TCP_PORTS}" | tr -s ' ' | sed 's/ /, /g')"
 TEMPLATE_KEYS="ADMIN_USER USB_GADGET_ADDRESS FW_TCP_PORTS_NFT RAUC_COMPATIBLE UNLOOK_APT_HOST
     UNLOOK_APT_URL UNLOOK_APT_SUITE UNLOOK_APT_COMPONENT UNLOOK_OTA_URL SDK_PACKAGE
-    HEALTH_TIMEOUT_S TRYBOOT_GUARD_S SDK_OTA_SOURCE SDK_GIT_URL SDK_GIT_BRANCH SDK_GIT_REQUIRE_SIGNED"
+    HEALTH_TIMEOUT_S TRYBOOT_GUARD_S SDK_OTA_SOURCE SDK_GIT_URL SDK_GIT_BRANCH SDK_GIT_REQUIRE_SIGNED
+    CAMERA_START_ORDER SERVICE_USER SDK_DAEMON_USER"
 
 render() {
     for k in ${TEMPLATE_KEYS}; do
@@ -127,11 +128,27 @@ PARTLABEL=unlook-boot-a  /boot/firmware    vfat  defaults,noatime,nodev,nosuid,n
 PARTLABEL=unlook-data    /data             ext4  defaults,noatime,nodev,nosuid,noexec,commit=5    0 2
 /data/unlook/etc         /etc/unlook       none  bind,x-systemd.requires-mounts-for=/data         0 0
 /data/unlook/var         /var/lib/unlook   none  bind,x-systemd.requires-mounts-for=/data         0 0
+/data/ota                /var/lib/unlook-ota none bind,x-systemd.requires-mounts-for=/data        0 0
 /data/journal            /var/log/journal  none  bind,x-systemd.requires-mounts-for=/data         0 0
 /data/bluetooth          /var/lib/bluetooth none bind,x-systemd.requires-mounts-for=/data         0 0
 EOF
 install -d -m 0755 "${R}/data" "${R}/etc/unlook" "${R}/var/log/journal"
 install -d -m 0700 "${R}/var/lib/unlook" "${R}/var/lib/bluetooth"
+install -d -m 0750 "${R}/var/lib/unlook-ota"
+
+# Daemon user. root today; with SDK_DAEMON_USER=<service user> the daemon runs
+# unprivileged on the polkit / D-Bus / group grants shipped in the overlay.
+if [ "${SDK_DAEMON_USER}" != root ]; then
+    install -D -m 0644 /dev/stdin "${R}/usr/lib/systemd/system/unlook-stream.service.d/20-unlook-user.conf" << EOF
+# Generated from SDK_DAEMON_USER=${SDK_DAEMON_USER} (config/unlook-os.conf).
+[Service]
+User=${SDK_DAEMON_USER}
+Group=${SDK_DAEMON_USER}
+SupplementaryGroups=video i2c gpio bluetooth netdev dialout
+ExecStartPre=+/usr/lib/unlook-os/unlook-perms
+EOF
+    log "unlook-stream runs as ${SDK_DAEMON_USER}"
+fi
 
 # USB gadget address comes from the build config, not from the script default.
 install -D -m 0644 /dev/stdin "${R}/etc/systemd/system/unlook-usb-gadget.service.d/10-unlook-os.conf" << EOF

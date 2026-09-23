@@ -7,7 +7,7 @@
 #   2. production profile: /boot/firmware/unlook/scanner_profile.yaml, validated
 #      by the SDK itself before it replaces the factory profile
 #   3. per-unit audit key (32 random bytes, 0400) for the SDK AuditLogger
-#   4. unit id + pairing secret (unlook_stream --pairing-code); the pairing
+#   4. unit id + pairing secret (unlook_stream --pairing-code --machine); the pairing
 #      code is written ONCE to the journal for the production label
 set -eu
 UOS_TAG=unlook-firstboot
@@ -39,7 +39,8 @@ if [ -z "$UOS_ROOT" ]; then
 fi
 
 install -d -m 0755 "$ETC" "$ETC/ssh" "$ETC/ssh/authorized_keys.d"
-install -d -m 0700 "$VAR" "$VAR/audit" "$VAR/ota" "$VAR/unlook_calib" "$VAR/cad" "$VAR/reports" "$VAR/scans"
+install -d -m 0700 "$VAR" "$VAR/audit" "$VAR/unlook_calib" "$VAR/cad" "$VAR/reports" "$VAR/scans"
+install -d -m 0750 "$UOS_STATE"
 
 # ---- 2. production profile --------------------------------------------------------
 SRC="$SEED/scanner_profile.yaml"
@@ -51,8 +52,9 @@ if [ -e "$SRC" ]; then
     elif tr -d '\000' < "$SRC" | cmp -s - "$SRC"; then
         cand="$ETC/scanner_profile.yaml.seed"
         install -m 0644 "$SRC" "$cand"
-        # The SDK's own loader is the validator (ranges, paths, sizes).
-        if unlook_stream "$cand" --pairing-code >/dev/null 2>&1; then
+        # The SDK's own loader is the validator (ranges, paths, sizes), with no
+        # side effect: `--check-profile` only loads and validates.
+        if unlook_stream --check-profile "$cand" >/dev/null 2>&1; then
             mv -f "$cand" "$PROFILE"
             uos_log notice "profile provisioned from the boot partition"
         else
@@ -77,10 +79,12 @@ fi
 unit=""
 code=""
 if command -v unlook_stream >/dev/null 2>&1; then
-    out="$(UNLOOK_PROFILE="$PROFILE" unlook_stream "$PROFILE" --pairing-code 2>/dev/null)" ||
-        uos_die "unlook_stream --pairing-code failed"
-    unit="$(printf '%s\n' "$out" | sed -n 's/^unit: \([A-Za-z0-9-]\{1,63\}\)$/\1/p' | head -n 1)"
-    code="$(printf '%s\n' "$out" | sed -n 's/^pairing code: \(UNLOOK1:[A-Za-z0-9:-]\{1,120\}\)$/\1/p' | head -n 1)"
+    # Machine form: exactly one line, UNLOOK1:<unit>:<secret> (creates the
+    # pairing secret in provisioning_dir on first call).
+    out="$(UNLOOK_PROFILE="$PROFILE" unlook_stream "$PROFILE" --pairing-code --machine 2>/dev/null)" ||
+        uos_die "unlook_stream --pairing-code --machine failed"
+    code="$(printf '%s\n' "$out" | sed -n '1{/^UNLOOK1:[A-Za-z0-9-]\{1,63\}:[A-Za-z2-7]\{16,64\}$/p;}')"
+    unit="$(printf '%s\n' "$code" | cut -d: -f2)"
 else
     # Bring-up image (no SDK): same derivation as the SDK's readUnitId() --
     # last 6 hex digits of the board serial, upper case.

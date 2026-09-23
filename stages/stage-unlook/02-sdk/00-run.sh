@@ -16,15 +16,24 @@ case "${SDK_DEB_SOURCE}" in
     local)
         rm -rf "${R}/tmp/unlook-debs"
         install -d "${R}/tmp/unlook-debs"
-        cp files/debs/*.deb "${R}/tmp/unlook-debs/"
+        # Runtime packages always; the -dev ones (headers + build deps) only when
+        # the unit builds SDK updates itself (SDK_OTA_SOURCE=github).
+        for d in files/debs/*.deb; do
+            case "$(basename "$d")" in
+                *-dev_* | *-dev.deb) [ "${SDK_OTA_SOURCE}" = github ] || continue ;;
+            esac
+            cp "$d" "${R}/tmp/unlook-debs/"
+        done
+        ls "${R}/tmp/unlook-debs/${SDK_PACKAGE}_"*_arm64.deb >/dev/null || die "no ${SDK_PACKAGE} .deb in debs/"
         on_chroot << EOF
 set -e
 apt-get update
 # Local .debs (SDK, OpenCV >= 4.7 on bookworm); every other dependency comes
 # from the Debian / Raspberry Pi archives.
 DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends /tmp/unlook-debs/*.deb
-# Seed the apt cache: unlook-ota rolls a failed SDK update back to this file.
+# Seed the apt cache: unlook-ota rolls a failed SDK update back to these files.
 cp /tmp/unlook-debs/${SDK_PACKAGE}_*_arm64.deb /var/cache/apt/archives/
+cp /tmp/unlook-debs/${SDK_PACKAGE}-dev_*_arm64.deb /var/cache/apt/archives/ 2>/dev/null || true
 rm -rf /tmp/unlook-debs
 EOF
         ;;
@@ -47,8 +56,11 @@ EOF
         ;;
     none)
         P=files/sdk-packaging
-        install -D -m 0644 "$P/systemd/unlook-usb-gadget.service" "${R}/usr/lib/systemd/system/unlook-usb-gadget.service"
-        install -D -m 0755 "$P/usb-gadget/unlook-usb-gadget.sh" "${R}/usr/local/sbin/unlook-usb-gadget.sh"
+        # Same layout as the package: helper in /usr/lib/unlook, unit rendered from its .in.
+        install -D -m 0755 "$P/usb-gadget/unlook-usb-gadget.sh" "${R}/usr/lib/unlook/unlook-usb-gadget.sh"
+        sed "s|@UNLOOK_LIBEXECDIR@|/usr/lib/unlook|g" "$P/systemd/unlook-usb-gadget.service.in" |
+            install -D -m 0644 /dev/stdin "${R}/usr/lib/systemd/system/unlook-usb-gadget.service"
+        ! grep -q "@[A-Z_]*@" "${R}/usr/lib/systemd/system/unlook-usb-gadget.service" || die "unrendered gadget unit"
         install -D -m 0644 "$P/bluetooth/unlook.conf" "${R}/etc/bluetooth/main.conf.d/unlook.conf"
         install -D -m 0644 "$P/scanner_profile.sample.yaml" "${R}/etc/unlook/scanner_profile.yaml"
         install -d -m 0700 "${R}/var/lib/unlook"
@@ -71,6 +83,10 @@ fi
 
 # Fail the build, not the unit: the pieces the OS integrates with must exist.
 for f in /usr/bin/unlook_stream /usr/lib/systemd/system/unlook-stream.service \
-         /usr/lib/systemd/system/unlook-usb-gadget.service; do
-    [ -e "${R}${f}" ] || die "SDK package did not install ${f} (see docs/SDK_CHANGES.md §4)"
+         /usr/lib/systemd/system/unlook-usb-gadget.service /usr/lib/unlook/unlook-usb-gadget.sh \
+         /etc/bluetooth/main.conf.d/unlook.conf; do
+    [ -e "${R}${f}" ] || die "SDK package did not install ${f}"
 done
+# The daemon must start at every boot (enabled by the SDK postinst).
+[ -e "${R}/etc/systemd/system/multi-user.target.wants/unlook-stream.service" ] ||
+    die "unlook-stream.service is not enabled"

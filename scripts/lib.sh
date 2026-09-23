@@ -94,6 +94,11 @@ conf_validate() {
     require_match SDK_DEB_SOURCE "$SDK_DEB_SOURCE" 'local|apt|none'
     require_match SDK_PACKAGE "$SDK_PACKAGE" '[a-z0-9][a-z0-9.+-]+'
     require_match SDK_OTA_SOURCE "$SDK_OTA_SOURCE" 'github|apt|off'
+    require_match CAMERA_START_ORDER "$CAMERA_START_ORDER" 'master_first|slave_first'
+    require_match SDK_DAEMON_USER "$SDK_DAEMON_USER" '[a-z][a-z0-9-]{0,30}'
+    if [ "$SDK_DAEMON_USER" != root ] && [ "$SDK_DAEMON_USER" != "$SERVICE_USER" ]; then
+        die "SDK_DAEMON_USER must be root or SERVICE_USER ($SERVICE_USER)"
+    fi
     require_match SDK_GIT_URL "$SDK_GIT_URL" 'git@github\.com:[A-Za-z0-9._-]+/[A-Za-z0-9._-]+\.git'
     require_match SDK_GIT_BRANCH "$SDK_GIT_BRANCH" '[A-Za-z0-9._/-]{1,64}'
     require_match SDK_GIT_REQUIRE_SIGNED "$SDK_GIT_REQUIRE_SIGNED" '0|1'

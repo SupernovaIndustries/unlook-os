@@ -49,7 +49,7 @@ pi-gen (slower).
 ```bash
 git clone --recurse-submodules <gitlab>/unlook/unlook-os.git && cd unlook-os
 scripts/dev-keys.sh                     # development keys in keys/dev (never ship)
-scripts/build-sdk-deb.sh                # debs/libunlook-sdk-dev_<ver>_arm64.deb
+scripts/build-sdk-deb.sh                # debs/libunlook-sdk{,-dev}_<ver>_arm64.deb
 opencv/build-deb.sh                     # bookworm only: debs/libopencv*.deb (≥ 4.7, aruco)
 ./build.sh rootfs                       # pi-gen → deploy/unlook-os-rootfs.tar
 ./build.sh image                        # deploy/unlook-os-<ver>.img.xz (+ slot images)
@@ -84,7 +84,8 @@ The data partition is mounted on `/data` and bind-mounted:
 | Mount | Contents |
 | --- | --- |
 | `/etc/unlook` | `scanner_profile.yaml`, `audit.key`, `unit-id`, `os.conf` (per-unit OS overrides), `stream.env`, `ssh/` |
-| `/var/lib/unlook` | `pairing.secret`, `hotspot.psk`, `cad/`, `reports/`, `scans/`, `unlook_calib/` (calibration: the daemon runs with `HOME=/var/lib/unlook`), `audit/`, `ota/` |
+| `/var/lib/unlook` | `pairing.secret`, `hotspot.psk`, `cad/`, `reports/`, `scans/`, `unlook_calib/` (calibration: the daemon runs with `HOME=/var/lib/unlook`), `audit/` |
+| `/var/lib/unlook-ota` | OS update state (root-owned, read-only for the daemon): `status` history, `last`, A/B boot markers, GitHub SDK sources, build log |
 | `/var/log/journal` | persistent journal |
 | `/var/lib/bluetooth` | BLE bonds (phones stay paired across OS updates) |
 
@@ -111,14 +112,14 @@ production if in doubt.
 
 1. grows `unlook-data` to the end of the medium (`growpart` + `resize2fs`);
 2. if `/boot/firmware/unlook/scanner_profile.yaml` exists (≤ 64 KiB, regular
-   file, no NUL), validates it **with the SDK's own loader** and installs it as
+   file, no NUL), validates it **with the SDK's own loader** (`unlook_stream --check-profile`) and installs it as
    `/etc/unlook/scanner_profile.yaml`; a rejected seed leaves the factory
    profile and is logged;
 3. generates the per-unit audit key (`/etc/unlook/audit.key`, 32 random bytes,
    0400); `unlook-stream` gets `UNLOOK_AUDIT_LOG=/var/lib/unlook/audit/audit.log`
    and `UNLOOK_AUDIT_KEY_FILE` from its drop-in;
 4. derives the unit id (`UNLK-` + last 6 hex digits of the board serial) and
-   the pairing secret via `unlook_stream --pairing-code`, stores the unit id
+   the pairing secret via `unlook_stream --pairing-code --machine`, stores the unit id
    in `/etc/unlook/unit-id` and writes the pairing code **once** to the journal.
 
 `unlook-identity.service` then sets the hostname to the unit id on every boot,
@@ -203,7 +204,7 @@ push of the bundle over the stream protocol is a possible SDK extension.)
                               backend set-primary B = arm [tryboot] only (default stays A)
                 ──reboot "0 tryboot"──► firmware boots B once
                                          unlook-health --boot, deadline HEALTH_TIMEOUT_S (120 s):
-                                           unlook-stream active AND `ping` → `OK pong` on :5556
+                                           unlook-stream active AND `ping` → `OK pong` AND `status` → `camera=ok` on :5556
                                   healthy ─► rauc mark-good → autoboot default = B  (COMMIT)
                                 unhealthy ─► rauc mark-bad, reboot → firmware boots A (ROLLBACK)
           kernel panic / hang / watchdog ─► next boot is a normal boot → A          (ROLLBACK)
@@ -308,6 +309,14 @@ reinstalled with `dpkg -i`, status `rolled_back:health_timeout`.
 - **SSH**: off by default. `sudo unlook-ssh add-key <file>` then
   `sudo unlook-ssh enable` (or the boot-partition seed, §8). Key-only, only
   `unlook-admin`, host key on the data partition. `unlook-ssh disable` closes it.
+- **Daemon user** (`SDK_DAEMON_USER`, default `root`): the OS already ships
+  what the daemon needs to run unprivileged as `unlook` — polkit
+  (`49-unlook.rules`: the NetworkManager actions for the hotspot and starting
+  exactly `unlook-ota-check` / `unlook-ota-apply@{sdk,os}`), D-Bus policy for
+  `org.bluez` / NetworkManager, device groups, read-only access to
+  `/var/lib/unlook-ota`, ownership of `audit.key` (`unlook-perms`,
+  `ExecStartPre=+`). Switching is a config change once the SDK has been
+  verified on the Pi as that user (docs/SDK_CHANGES.md open item 2).
 - **Accounts**: `root` and `unlook-admin` passwords are locked; console login
   is therefore impossible — the debug UART is a boot log, not a shell.
   `unlook-admin` has passwordless sudo (key-only access). `unlook` is the
@@ -337,10 +346,10 @@ reinstalled with `dpkg -i`, status `rolled_back:health_timeout`.
 | libcamera | the Raspberry Pi archive build has **no** Mira220 CamHelper → `unlook-libcamera` built from `ams-OSRAM/libcamera` (0.7.1, `/usr/local`, `LIBCAMERA_REPO`/`LIBCAMERA_REF`); as in `drivers/mira220-sync/README.md`: libcamera picks the CamHelper by substring (`mira220-sync` → `mira220` helper) but the tuning by exact name, so the stage links `mira220-sync.json` → `mira220.json` in `/usr/local/share/libcamera/ipa/rpi/{pisp,vc4}` (the driver exposes Bayer formats; the build fails if either link is missing) |
 | Wiring | JST sync cable J6 (master) ↔ J4 (slave) carrying ILLUM_TRIGGER + FRAME_TRIGG; sync switches in position 2 |
 
-Operational rule from the bench: the slave must be streaming **before** the
-master starts, and the master must stop **after** the slave (otherwise the
-slave waits for a trigger that never comes). The SDK's capture start order must
-honour this (SDK_CHANGES §6).
+**Start order (owner requirement): MASTER first, then SLAVE; stop in reverse.**
+Forced on the daemon by the unlook-stream drop-in
+(`UNLOOK_CAMERA_START_ORDER=master_first`, config `CAMERA_START_ORDER`),
+whatever the profile says (docs/SDK_CHANGES.md, open item 1).
 
 Checks on a unit:
 ```bash

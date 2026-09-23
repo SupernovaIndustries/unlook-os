@@ -59,6 +59,7 @@ install -d -m 0755 "$D/unlook" "$D/unlook/etc"
 install -d -m 0700 "$D/unlook/var"
 install -d -m 2755 "$D/journal"
 install -d -m 0700 "$D/bluetooth" "$D/rauc"
+install -d -m 0750 "$D/ota"
 cp -a "$R/etc/unlook/." "$D/unlook/etc/" 2>/dev/null || true
 cp -a "$R/var/lib/unlook/." "$D/unlook/var/" 2>/dev/null || true
 chmod 0700 "$D/unlook/var"
@@ -67,7 +68,7 @@ find "$R/etc/unlook" "$R/var/lib/unlook" -mindepth 1 -delete 2>/dev/null || true
 if [ -d "$R/var/log/journal" ]; then
     chgrp --reference="$R/var/log/journal" "$D/journal" 2>/dev/null || true
 fi
-install -d "$R/data" "$R/boot/firmware" "$R/boot/cfg"
+install -d "$R/data" "$R/boot/firmware" "$R/boot/cfg" "$R/var/lib/unlook-ota"
 
 # ---- autoboot selector ------------------------------------------------------
 cat > "$W/autoboot.txt" <<'EOF'

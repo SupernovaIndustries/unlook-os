@@ -5,7 +5,8 @@
 #   unlook-health --wait [S]      (unlook-ota after an SDK update; no slot changes)
 #   unlook-health --once          (one probe, exit 0/1)
 #
-# Healthy = unlook-stream.service is `active` AND answers `ping` with `OK pong`
+# Healthy = unlook-stream.service is `active`, answers `ping` with `OK pong`
+# AND reports `camera=ok` in `status`
 # on the UCP port (profile command_port, default 5556) within the deadline
 # (HEALTH_TIMEOUT_S, default 120 s, monotonic clock).
 #
@@ -40,7 +41,8 @@ probe() {
     if [ "$PORT" -eq 0 ]; then
         return 0 # command port disabled in the profile: service state only
     fi
-    timeout 8 "$LIB/ucp-ping" 127.0.0.1 "$PORT" 3 >/dev/null 2>&1
+    # `ping` answers even without cameras: also require status camera=ok.
+    timeout 10 "$LIB/ucp-ping" 127.0.0.1 "$PORT" 3 camera >/dev/null 2>&1
 }
 
 wait_healthy() {

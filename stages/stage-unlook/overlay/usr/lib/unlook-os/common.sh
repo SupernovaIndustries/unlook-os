@@ -7,7 +7,9 @@ UOS_ROOT="${UNLOOK_OS_TESTROOT:-}"
 UOS_CONF="$UOS_ROOT/etc/unlook-os/os.conf"
 UOS_CONF_LOCAL="$UOS_ROOT/etc/unlook/os.conf"
 UOS_RELEASE="$UOS_ROOT/etc/unlook-os-release"
-UOS_STATE="$UOS_ROOT/var/lib/unlook/ota"
+# OS update state (root-owned, readable by the service group): data partition,
+# separate from the daemon state in /var/lib/unlook.
+UOS_STATE="$UOS_ROOT/var/lib/unlook-ota"
 UOS_RUN="$UOS_ROOT/run/unlook/ota"
 UOS_PROC="$UOS_ROOT/proc"
 UOS_CFG_MNT="$UOS_ROOT/run/unlook/cfg"

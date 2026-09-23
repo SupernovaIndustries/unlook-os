@@ -1,0 +1,11 @@
+# `ota_check` for an unprivileged daemon: runs the check as root and leaves the
+# one-line result in /run/unlook/ota/check (read by `unlook-ota check --machine`).
+[Unit]
+Description=Unlook OTA check
+RequiresMountsFor=/var/lib/unlook-ota /etc/unlook
+After=network.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/sbin/unlook-ota _check-to-file
+TimeoutStartSec=120

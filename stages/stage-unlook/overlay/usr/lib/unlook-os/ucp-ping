@@ -1,16 +1,22 @@
 #!/bin/bash
-# ucp-ping [host] [port] [timeout_s]
+# ucp-ping [host] [port] [timeout_s] [camera]
 # Liveness probe over the Unlook Command Protocol (UCP v1, unlook-sdk
 # docs/COMMAND_PROTOCOL.md): expects the "EV hello:" greeting, sends a tagged
-# `ping`, succeeds only on the tagged "OK pong". Exit 0 = alive.
+# `ping` and requires the tagged "OK pong". With the 4th argument `camera` it
+# then sends a tagged `status` and also requires `camera=ok` in it (the SDK
+# answers `ping` even while the cameras are down).
+# Exit: 0 alive (+ cameras ok), 2 no connection, 3 no greeting, 4 no reply,
+#       5 ERR reply, 6 cameras not ok, 64 bad arguments.
 set -euo pipefail
 
 host="${1:-127.0.0.1}"
 port="${2:-5556}"
 tmo="${3:-3}"
+want_camera="${4:-}"
 [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((port >= 1 && port <= 65535)) || exit 64
 [[ "$tmo" =~ ^[0-9]{1,2}$ ]] || exit 64
 [[ "$host" =~ ^[0-9.]{7,15}$ ]] || exit 64
+[[ -z "$want_camera" || "$want_camera" == camera ]] || exit 64
 
 exec 3<>"/dev/tcp/$host/$port" || exit 2
 trap 'exec 3>&- 3<&-' EXIT
@@ -19,14 +25,28 @@ IFS= read -r -t "$tmo" line <&3 || exit 3
 line="${line%$'\r'}"
 [[ "$line" == "EV hello:"* ]] || exit 3
 
-printf '#hc ping\n' >&3
-for _ in 1 2 3 4 5 6 7 8; do
-    IFS= read -r -t "$tmo" line <&3 || exit 4
-    line="${line%$'\r'}"
-    case "$line" in
-        "#hc OK pong"*) printf 'quit\n' >&3 || true; exit 0 ;;
-        "#hc ERR"*) exit 5 ;;
-        *) ;; # EV / RES lines broadcast to every client
-    esac
-done
-exit 4
+# request <tag> <command> -> prints the tagged reply line; skips EV / RES lines.
+request() {
+    printf '#%s %s\n' "$1" "$2" >&3
+    local _ l
+    for _ in 1 2 3 4 5 6 7 8 9 10 11 12; do
+        IFS= read -r -t "$tmo" l <&3 || return 4
+        l="${l%$'\r'}"
+        if [[ "$l" == "#$1 "* ]]; then
+            printf '%s\n' "${l#"#$1 "}"
+            return 0
+        fi
+    done
+    return 4
+}
+
+reply="$(request hc ping)" || exit 4
+[[ "$reply" == "OK pong"* ]] || exit 5
+
+if [[ -n "$want_camera" ]]; then
+    reply="$(request hs status)" || exit 4
+    [[ "$reply" == "OK status:"* ]] || exit 5
+    [[ ";${reply#OK status:};" == *";camera=ok;"* ]] || exit 6
+fi
+printf 'quit\n' >&3 || true
+exit 0
