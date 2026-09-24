@@ -75,6 +75,42 @@ scripts/docker-build.sh image
 scripts/docker-build.sh bundle      # a newer build = a valid OS update for units running the older one
 ```
 
+### 1.5 Windows PC (WSL2) instead of a Mac
+
+Works the same, but an x86 PC **emulates** the arm64 builder: the first full
+build takes several hours (let it run, e.g. overnight); later builds reuse
+OpenCV and libcamera from `debs/`.
+
+One-time, in an **Ubuntu (WSL)** terminal:
+```bash
+sudo apt-get update && sudo apt-get install -y docker.io qemu-user-static binfmt-support git
+sudo usermod -aG docker "$USER"
+# reuse the Windows GitHub login (Git Credential Manager) for the private repos
+git config --global credential.helper "/mnt/c/Program\ Files/Git/mingw64/bin/git-credential-manager.exe"
+```
+Then in PowerShell `wsl --shutdown`, reopen Ubuntu and check:
+```bash
+docker run --rm --platform linux/arm64 debian:bookworm uname -m     # must print aarch64
+```
+Build **inside the WSL file system** (not under `/mnt/c` or `/mnt/e`: slow, and
+Windows drives lose Linux file modes):
+```bash
+cd ~ && git clone --recurse-submodules https://github.com/SupernovaIndustries/unlook-os.git
+cd ~/unlook-os && scripts/docker-build.sh all
+```
+Hand the image to Raspberry Pi Imager for Windows through a Windows folder:
+```bash
+mkdir -p /mnt/c/Users/$USER/Downloads/unlook-os        # adjust to your Windows user name
+cp deploy/unlook-os-*.img.xz deploy/*.imageinfo /mnt/c/Users/$USER/Downloads/unlook-os/
+scripts/imager-manifest.sh /mnt/c/Users/$USER/Downloads/unlook-os   # -> unlook-os.json with a C:\ path
+```
+In Imager (Windows): *App Options → Content repository → Use custom file* →
+`Downloads\unlook-os\unlook-os.json`, then §2.1.
+
+> `keys/dev/` is created per checkout: units flashed from the PC build accept
+> updates only from bundles built with the PC's `keys/dev/` (copy the folder
+> between machines to share them).
+
 ---
 
 ## 2. Flash
