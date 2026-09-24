@@ -1,4 +1,5 @@
 network-manager
+avahi-daemon
 dnsmasq-base
 wpasupplicant
 bluez

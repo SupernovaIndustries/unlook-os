@@ -3,7 +3,7 @@
 # /var/lib/unlook and enables unlook-stream.service).
 # SDK_DEB_SOURCE=none (hardware bring-up): no daemon; only the SDK's USB-C
 # gadget, BlueZ settings and sample profile are installed from the submodule.
-# shellcheck source=../lib.sh
+# shellcheck source=../../../scripts/lib.sh
 . "${STAGE_DIR}/lib.sh"
 conf_load "${STAGE_DIR}/unlook-os.conf"
 conf_validate

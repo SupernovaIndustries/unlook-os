@@ -1,2 +1,4 @@
-# Follow `. lib.sh` (paths come from the "# shellcheck source=" directives).
+# Follow `. lib.sh` / `. common.sh` ("# shellcheck source=" paths are relative
+# to the script, so the checks give the same result from any directory).
 external-sources=true
+source-path=SCRIPTDIR

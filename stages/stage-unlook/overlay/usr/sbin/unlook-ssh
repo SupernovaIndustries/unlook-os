@@ -1,11 +1,14 @@
 #!/bin/sh
-# unlook-ssh -- SSH is OFF by default; this is the only switch.
+# unlook-ssh -- the only switch for SSH. On from the first boot when the image
+# is built with SSH_DEFAULT=on (per-unit admin password), otherwise off.
 #
-#   unlook-ssh enable     host key + firewall hole + sshd (key-only unless password
-#                         login was chosen in Raspberry Pi Imager)
+#   unlook-ssh enable     host key + firewall hole + sshd (key-only unless a password
+#                         exists: first boot, Raspberry Pi Imager or `unlook-ssh passwd`)
 #   unlook-ssh disable
 #   unlook-ssh status
 #   unlook-ssh add-key <file>   append public keys for the login user (uid 1000)
+#   unlook-ssh passwd     set a new admin password (kept across OS updates); the
+#                         first-boot password is then no longer shown anywhere
 #   unlook-ssh sync       (boot) consume the boot-partition seed, restore state
 #
 # State lives on the data partition (/etc/unlook/ssh), so it survives OS
@@ -57,7 +60,7 @@ fw_close() { nft delete element inet unlook admin_tcp '{ 22 }' 2>/dev/null || tr
 
 start_ssh() {
     if [ ! -s "$KEYS" ] && [ ! -s "$ADMIN_HOME/.ssh/authorized_keys" ] &&
-        [ ! -f "$D/sshd.d/10-imager-password.conf" ]; then
+        [ ! -f "$D/sshd.d/10-imager-password.conf" ] && [ ! -f "$D/sshd.d/10-password.conf" ]; then
         uos_die "no authorized key for $ADMIN: run 'unlook-ssh add-key <file>' first"
     fi
     install -d -m 0755 "$D/sshd.d"
@@ -88,6 +91,23 @@ case "${1:-}" in
     add-key)
         add_keys "${2:?usage: unlook-ssh add-key <file>}"
         ;;
+    passwd)
+        passwd "$ADMIN"
+        hash="$(getent shadow "$ADMIN" | cut -d: -f2)"
+        case "$hash" in '' | '!'* | '*'*) uos_die "no password set" ;; esac
+        C="$UOS_ROOT/etc/unlook/credentials"
+        install -d -m 0700 "$C" "$D/sshd.d"
+        umask 077
+        printf '%s\n' "$hash" > "$C/admin-password-hash.new"
+        mv -f "$C/admin-password-hash.new" "$C/admin-password-hash"
+        rm -f "$C/admin-password" "$UOS_ROOT/etc/unlook/imager/password-hash"
+        printf 'PasswordAuthentication yes\nAuthenticationMethods any\n' > "$D/sshd.d/10-password.conf"
+        chmod 0644 "$D/sshd.d/10-password.conf"
+        # The credentials file on the UNLOOKCFG partition drops the old password.
+        unlook-credentials write-cfg 2>/dev/null || true
+        [ -f "$FLAG" ] && systemctl try-reload-or-restart ssh.service 2>/dev/null || true
+        uos_log notice "admin password changed (kept on the data partition)"
+        ;;
     sync)
         if [ -f "$SEED/authorized_keys" ]; then
             add_keys "$SEED/authorized_keys" || true
@@ -101,7 +121,7 @@ case "${1:-}" in
         if [ -f "$FLAG" ]; then start_ssh || uos_log err "SSH flagged but could not start"; fi
         ;;
     *)
-        sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'
+        sed -n '2,18p' "$0" | sed 's/^# \{0,1\}//'
         exit 64
         ;;
 esac

@@ -65,7 +65,12 @@ if [ -n "$user" ]; then
     hash="$(getent shadow "$user" | cut -d: -f2)"
     case "$hash" in
         '' | '!'* | '*'*) rm -f "$SAVE/password-hash" ;;
-        *) printf '%s\n' "$hash" > "$SAVE/password-hash" ;;
+        *)
+            printf '%s\n' "$hash" > "$SAVE/password-hash"
+            # A password chosen in Imager replaces the unit's generated one.
+            rm -f "$ETC/credentials/admin-password" "$ETC/credentials/admin-password-hash" \
+                "$ETC/ssh/sshd.d/10-password.conf"
+            ;;
     esac
     if [ -s "$home/.ssh/authorized_keys" ]; then
         install -m 0644 "$home/.ssh/authorized_keys" "$ETC/ssh/authorized_keys.d/$user"

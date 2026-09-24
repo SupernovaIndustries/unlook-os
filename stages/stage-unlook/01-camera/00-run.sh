@@ -11,7 +11,7 @@
 #   * kernel packages held: the out-of-tree module must match the kernel, so
 #     the kernel only ever changes through an OS bundle.
 # Build tools needed here are removed again before the stage ends.
-# shellcheck source=../lib.sh
+# shellcheck source=../../../scripts/lib.sh
 . "${STAGE_DIR}/lib.sh"
 conf_load "${STAGE_DIR}/unlook-os.conf"
 conf_validate

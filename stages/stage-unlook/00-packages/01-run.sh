@@ -1,10 +1,11 @@
 #!/bin/bash -e
-# Remove what an appliance must not run: mDNS responder, remote-access agents,
+# Remove what an appliance must not run: remote-access agents,
 # the first-boot user wizard, modem management, swap on eMMC, periodic apt.
 on_chroot << 'EOF'
 set -e
 # userconf-pi stays: Raspberry Pi Imager customisation uses it (its wizard is masked).
-for p in avahi-daemon rpi-connect rpi-connect-lite modemmanager triggerhappy dphys-swapfile; do
+# avahi-daemon stays (NET_MDNS: <hostname>.local only, configured in 03-system).
+for p in rpi-connect rpi-connect-lite modemmanager triggerhappy dphys-swapfile; do
     if dpkg -s "$p" >/dev/null 2>&1; then
         DEBIAN_FRONTEND=noninteractive apt-get purge -y "$p"
     fi

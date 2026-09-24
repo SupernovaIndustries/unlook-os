@@ -1,7 +1,7 @@
 #!/bin/bash -e
 # Replaces pi-gen's export-image: finalise the rootfs and hand it to
 # image/mkimage.sh as a tarball (A/B GPT layout is built outside pi-gen).
-# shellcheck source=../lib.sh
+# shellcheck source=../../../scripts/lib.sh
 . "${STAGE_DIR}/lib.sh"
 conf_load "${STAGE_DIR}/unlook-os.conf"
 R="${ROOTFS_DIR}"
@@ -47,7 +47,21 @@ for u in multi-user.target.wants/ssh.service sockets.target.wants/ssh.socket; do
         die "${u##*/} is enabled"
     fi
 done
-[ ! -e "${R}/usr/sbin/avahi-daemon" ] || die "avahi-daemon is installed"
+# mDNS (NET_MDNS): hostname only -- no service records, no host info.
+if [ -e "${R}/usr/sbin/avahi-daemon" ]; then
+    for kv in publish-workstation=no publish-hinfo=no disable-user-service-publishing=yes enable-reflector=no enable-wide-area=no; do
+        grep -qx "$kv" "${R}/etc/avahi/avahi-daemon.conf" || die "avahi-daemon.conf lacks $kv"
+    done
+    ! ls "${R}/etc/avahi/services/"*.service >/dev/null 2>&1 || die "avahi publishes service records"
+    if [ "${NET_MDNS}" != on ] && [ -L "${R}/etc/systemd/system/multi-user.target.wants/avahi-daemon.service" ]; then
+        die "avahi-daemon is enabled with NET_MDNS=off"
+    fi
+fi
+# The setup page and the SSH switch must be what the image ships, nothing wider.
+grep -q "^ListenStream=${NET_AP_ADDRESS%/*}:${NET_SETUP_PORT}\$" "${R}/usr/lib/systemd/system/unlook-setup.socket" ||
+    die "unlook-setup.socket does not listen on the hotspot address only"
+grep -q '^CapabilityBoundingSet=$' "${R}/usr/lib/systemd/system/unlook-setup.service" ||
+    die "unlook-setup.service must hold no capability"
 grep -q "^${ADMIN_USER}:!" "${R}/etc/shadow" || die "${ADMIN_USER} password is not locked"
 grep -q '^root:[!*]' "${R}/etc/shadow" || die "root password is not locked"
 [ -s "${R}/etc/rauc/keyring.pem" ] || die "no RAUC keyring"

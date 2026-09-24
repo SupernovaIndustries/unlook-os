@@ -9,3 +9,4 @@
 *.img.xz
 *.key
 *.asc
+.DS_Store

@@ -49,7 +49,10 @@ lint:units:
   stage: lint
   script:
     - systemd-analyze verify --man=no stages/stage-unlook/overlay/usr/lib/systemd/system/*.service || true
-    - nft -c -f stages/stage-unlook/overlay/etc/nftables.conf 2>/dev/null || sed 's/@FW_TCP_PORTS_NFT@/5555, 5556/' stages/stage-unlook/overlay/etc/nftables.conf | nft -c -f -
+    - >
+      sed -e 's/@FW_TCP_PORTS_NFT@/5555, 5556/' -e 's/@NET_AP_IFACE@/wlan0/' -e 's/@NET_AP_IP@/10.42.0.1/'
+      -e 's/@NET_SETUP_PORT@/80/' -e 's/@NET_MDNS_NFT@/udp dport 5353 accept/'
+      stages/stage-unlook/overlay/etc/nftables.conf | nft -c -f -
 
 test:unit:
   stage: test

@@ -1,0 +1,36 @@
+# The page itself holds no capability: every change goes through unlook-wifi,
+# which hands the switch to a transient unit (systemd-run) outside this sandbox.
+[Unit]
+Description=Unlook setup page (choose the Wi-Fi from the phone)
+Documentation=file:/usr/share/doc/unlook-os/OS.md
+Requires=unlook-setup.socket
+RequiresMountsFor=/etc/unlook
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 -I /usr/lib/unlook-os/setup-page.py
+Environment=UNLOOK_SETUP_HOST=@NET_AP_IP@
+Environment=UNLOOK_SETUP_PORT=@NET_SETUP_PORT@
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+ProtectSystem=strict
+ReadWritePaths=/etc/unlook/network /etc/NetworkManager/system-connections /run/unlook
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+SystemCallArchitectures=native
+UMask=0077
+Restart=on-failure
+RestartSec=2

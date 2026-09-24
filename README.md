@@ -82,7 +82,11 @@ scripts/docker-build.sh bundle      # a newer build = a valid OS update for unit
 The build produces a **disk image** (not an ISO): `deploy/unlook-os-<ver>.img.xz`.
 It flashes like any Raspberry Pi OS image.
 
-### 2.1 Raspberry Pi Imager — with OS customisation (recommended)
+### 2.1 Raspberry Pi Imager — with OS customisation (optional)
+
+> Not required, and in practice Imager may not offer the customisation dialog
+> for this custom image. A unit flashed without it is set up on the unit
+> itself: hotspot + setup page + per-unit SSH password (§2.3).
 
 Imager only offers its *OS customisation* (user + password, SSH, Wi-Fi, hostname,
 timezone, keyboard) for images from a catalogue, never for "Use custom". The
@@ -101,10 +105,11 @@ then keeps it on the data partition: user, password, SSH, Wi-Fi, timezone,
 keyboard and hostname **survive every OS update**. If no hostname is set in
 Imager the unit is called `UNLK-xxxxxx`.
 
-> Wi-Fi from Imager makes the unit a Wi-Fi **client** (office network). The
-> scanner's own hotspot for the phone uses the same radio: for phone tests keep
-> the default profile (`net_mode: ble`), for bench work on the office Wi-Fi put
-> `net_mode: lan` in the profile.
+> Wi-Fi from Imager makes the unit a Wi-Fi **client** (office network) from the
+> first boot: `ssh <user>@UNLK-xxxxxx.local` with the password you set in Imager.
+> The phone app can still raise the hotspot over BLE (same radio: the office
+> Wi-Fi drops while the phone uses it). Without Wi-Fi in Imager the unit starts
+> in hotspot mode (§2.3).
 
 ### 2.2 balenaEtcher or `dd` — no customisation
 
@@ -120,7 +125,27 @@ diskutil eject /Volumes/UNLOOKBOOT
 (Terminal alternative: `diskutil list`, `diskutil unmountDisk /dev/diskN`,
 `xz -dc deploy/unlook-os-*.img.xz | sudo dd of=/dev/rdiskN bs=4m`.)
 
-### 2.3 Optional files on `UNLOOKBOOT/unlook/` (both methods)
+### 2.3 First boot without Wi-Fi: hotspot + setup page
+
+A unit with no Wi-Fi saved (flashed without customisation, or Imager without
+Wi-Fi) keeps its hotspot on. Credentials are **per unit**: after the first boot
+put the card in the Mac and open **`UNLOOKCFG/unlook-credenziali.txt`** (plus
+`unlook-qr-wifi.png`: scan it with the phone to join) — or read the label.
+
+1. Phone → Wi-Fi **`Unlook-xxxxxx`**, password from the file / QR.
+2. Browser → **`http://10.42.0.1/`** (same address on every unit).
+3. Pick the office network, type its password → *Collega lo scanner*. The page
+   also shows the SSH login (`unlook-admin` + this unit's password).
+4. The hotspot goes off and the unit joins the Wi-Fi. Then
+   `ssh unlook-admin@UNLK-xxxxxx.local` (or the Android app over BLE).
+   Wrong password or no signal → the hotspot comes back by itself (≤ 2 min)
+   and the page shows the error.
+
+On the unit: `sudo unlook-credentials` (all credentials), `sudo unlook-wifi
+status`, `sudo unlook-wifi forget` (back to the hotspot), `sudo unlook-ssh
+passwd` (new admin password; the generated one is then no longer shown).
+
+### 2.4 Optional files on `UNLOOKBOOT/unlook/` (both methods)
 
 | File | Effect at boot |
 | --- | --- |
@@ -130,7 +155,7 @@ diskutil eject /Volumes/UNLOOKBOOT
 
 The files are consumed and deleted at boot (the profile stays for factory resets).
 
-### 2.4 CM5 eMMC
+### 2.5 CM5 eMMC
 
 Put the carrier in USB-boot mode (nRPIBOOT jumper), connect USB-C, run
 `rpiboot` (Mac: `brew install libusb pkg-config`, build
@@ -138,14 +163,17 @@ https://github.com/raspberrypi/usbboot with `make`, run
 `sudo ./rpiboot -d mass-storage-gadget64`): the eMMC appears as a disk →
 flash it with Imager (2.1) or Etcher (2.2).
 
-### 2.5 Connect
+### 2.6 Connect
 
-USB-C cable (the unit is `10.43.0.1`, the Mac gets an address by DHCP),
-Ethernet, or the Wi-Fi set in Imager:
+USB-C cable (the unit is `10.43.0.1`, the Mac gets an address by DHCP), its
+hotspot (`10.42.0.1`), or the office Wi-Fi / Ethernet:
 ```bash
-ssh <user>@10.43.0.1          # <user>: the one set in Imager, else unlook-admin (key only)
-ssh <user>@<IP>               # on Wi-Fi/Ethernet: the IP your router gave it
+ssh <user>@10.43.0.1          # <user>: the one set in Imager, else unlook-admin
+ssh <user>@10.42.0.1          # on the unit's hotspot Unlook-xxxxxx
+ssh <user>@UNLK-xxxxxx.local  # on the office Wi-Fi/Ethernet (mDNS), or the router's IP
 ```
+Password: the one set in Imager, else this unit's own (`UNLOOKCFG/unlook-credenziali.txt`,
+the setup page, or the label).
 
 ## 3. Test on the CM5 (checklist)
 
@@ -188,9 +216,11 @@ and check the phone reconnects **without any login on the unit**.
 
 **Security**
 ```bash
-ss -tulpn                                     # only 5555, 5556 (+ 22 while SSH is on, 53/67 on shared links)
+ss -tulpn                                     # only 5555, 5556, 22, 10.42.0.1:80 (setup), 5353/udp (mDNS), 53/67 on shared links
+unlook-credentials                            # per-unit hotspot + SSH password, pairing code
+unlook-wifi status                            # mode ap (hotspot) / ble (Wi-Fi client), address
 nft list ruleset | head -40
-unlook-ssh status                             # enabled (you enabled it for testing)
+unlook-ssh status                             # enabled (on from the first boot)
 ```
 
 **SDK update from GitHub** (needs the deploy key, internet on Ethernet/Wi-Fi client)

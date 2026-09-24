@@ -41,6 +41,34 @@
    `camera_ready` after plugging), start order master → slave with the sync
    cable.
 
+4. **Wi-Fi from the app over BLE** (P1, owner request 2026-09-24; OS side done,
+   docs/OS.md §5.1). The OS owns the unit's Wi-Fi client setup through one
+   root tool, `/usr/sbin/unlook-wifi` (fixed argv, secrets on stdin):
+   `list` (TSV `signal<TAB>security<TAB>ssid`, strongest first, from the last
+   scan), `scan`, `set` (stdin `<ssid>\n<password>\n`, empty password = open;
+   validated, saved on the data partition, switched in a transient unit with
+   automatic rollback to the previous network / the hotspot), `forget`,
+   `status --kv` (`mode`, `connection`, `address`, `state`
+   `ap|pending|connecting|connected|failed|fallback`, `ssid`, `error`). The
+   SDK needs, in the BLE provisioning service (behind the same pairing-code
+   authentication, AES-GCM with the session key):
+   - a **Wi-Fi list** characteristic (encrypted read) → the `unlook-wifi list`
+     output as JSON;
+   - a **Wi-Fi config** characteristic (encrypted write) → `{ssid, password}`
+     piped to `unlook-wifi set`; the daemon runs as root today, or needs a
+     polkit/sudo rule for exactly that command once `SDK_DAEMON_USER=unlook`;
+   - a **network status** characteristic (encrypted read + notify) →
+     `unlook-wifi status --kv`, including the **LAN address**, so the app can
+     reach the unit on the office Wi-Fi without typing the IP;
+   - UCP equivalents for the console (`wifi_list`, `wifi_set`, `wifi_status`).
+   Today in `ble`/`lan` mode the app has no way to learn the LAN address, and
+   a BLE `start` in `lan` mode times out (`HOTSPOT_TIMEOUT`).
+5. **Hotspot robustness** (P2): a failed `nmcli` bring-up is not retried
+   until the next `start` (the OS restarts the daemon once, `unlook-wifi
+   watch`); `unlook-ap` is hardcoded (an `ap_connection_name` key would help);
+   PROVISIONING.md §5 still says `proto: 3` (the daemon sends 4) and §2 calls
+   the unit id the SSID (it is `Unlook-<hex>`).
+
 ## Camera stack the SDK runs on (reference)
 
 The OS provides (docs/OS.md §10): `mira220-sync.ko` (CAM0 master, CAM1 slave

@@ -1,0 +1,16 @@
+# Setup page (Wi-Fi choice) on the hotspot address only. FreeBind: the address
+# appears when the SDK daemon raises the hotspot; the socket exists before. No
+# BindToDevice: the Wi-Fi interface may not exist yet at sockets.target; the
+# address exists only on the hotspot and nftables admits only its interface.
+[Unit]
+Description=Unlook setup page socket (http://@NET_AP_IP@/ on the hotspot)
+Documentation=file:/usr/share/doc/unlook-os/OS.md
+
+[Socket]
+ListenStream=@NET_AP_IP@:@NET_SETUP_PORT@
+FreeBind=yes
+Backlog=8
+MaxConnections=8
+
+[Install]
+WantedBy=sockets.target

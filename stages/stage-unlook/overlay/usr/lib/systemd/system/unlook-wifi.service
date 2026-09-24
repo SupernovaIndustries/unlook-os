@@ -1,0 +1,16 @@
+[Unit]
+Description=Unlook network mode (hotspot until a Wi-Fi is saved, then Wi-Fi client)
+Documentation=file:/usr/share/doc/unlook-os/OS.md
+RequiresMountsFor=/etc/unlook
+Wants=NetworkManager.service
+After=NetworkManager.service unlook-firstboot.service unlook-identity.service
+Before=unlook-stream.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/unlook-wifi boot
+TimeoutStartSec=90
+
+[Install]
+WantedBy=multi-user.target

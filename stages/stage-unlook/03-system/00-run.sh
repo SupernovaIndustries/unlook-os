@@ -1,7 +1,7 @@
 #!/bin/bash -e
 # Unlook OS system layer: overlay files, boot configuration, partition mounts,
 # users, services. Everything derives from unlook-os.conf.
-# shellcheck source=../lib.sh
+# shellcheck source=../../../scripts/lib.sh
 . "${STAGE_DIR}/lib.sh"
 conf_load "${STAGE_DIR}/unlook-os.conf"
 conf_validate
@@ -15,15 +15,29 @@ OVL="${STAGE_DIR}/overlay"
 UNLOOK_APT_HOST="${UNLOOK_APT_URL#https://}"
 UNLOOK_APT_HOST="${UNLOOK_APT_HOST%%/*}"
 UNLOOK_APT_HOST="${UNLOOK_APT_HOST%%:*}"
+# shellcheck disable=SC2034 # read by render() through ${!k}
 FW_TCP_PORTS_NFT="$(printf '%s' "${FW_TCP_PORTS}" | tr -s ' ' | sed 's/ /, /g')"
+# shellcheck disable=SC2034 # read by render() through ${!k}
+NET_AP_IP="${NET_AP_ADDRESS%/*}"
+# shellcheck disable=SC2034 # read by render() through ${!k}
+if [ "${NET_MDNS}" = on ]; then
+    NET_MDNS_NFT="udp dport 5353 accept"
+    NET_MDNS_PRESET=enable
+else
+    NET_MDNS_NFT="# mDNS off (NET_MDNS=off)"
+    NET_MDNS_PRESET=disable
+fi
 TEMPLATE_KEYS="ADMIN_USER USB_GADGET_ADDRESS FW_TCP_PORTS_NFT RAUC_COMPATIBLE UNLOOK_APT_HOST
     UNLOOK_APT_URL UNLOOK_APT_SUITE UNLOOK_APT_COMPONENT UNLOOK_OTA_URL SDK_PACKAGE
     HEALTH_TIMEOUT_S TRYBOOT_GUARD_S SDK_OTA_SOURCE SDK_GIT_URL SDK_GIT_BRANCH SDK_GIT_REQUIRE_SIGNED
-    CAMERA_START_ORDER SERVICE_USER SDK_DAEMON_USER"
+    CAMERA_START_ORDER SERVICE_USER SDK_DAEMON_USER
+    SSH_DEFAULT NET_AP_IFACE NET_AP_ADDRESS NET_AP_IP NET_SETUP_PORT NET_LAN_FALLBACK_S NET_MDNS
+    NET_CREDENTIALS_FILE NET_MDNS_NFT NET_MDNS_PRESET"
 
 render() {
     for k in ${TEMPLATE_KEYS}; do
         v="${!k}"
+        # shellcheck disable=SC1003 # '\' is a literal backslash pattern
         case "$v" in *'|'* | *'\'* | *'&'*) die "template value $k has forbidden characters" ;; esac
         sed -i "s|@${k}@|${v}|g" "$1"
     done
@@ -172,7 +186,15 @@ passwd -l ${ADMIN_USER}
 passwd -l root
 systemctl enable unlook-firstboot.service unlook-identity.service unlook-health.service \
     unlook-tryboot-guard.service unlook-ssh.service unlook-ota-provision.service unlook-imager.service nftables.service \
-    NetworkManager.service bluetooth.service
+    NetworkManager.service bluetooth.service \
+    unlook-wifi.service unlook-wifi-watch.service unlook-setup.socket unlook-credentials.service
+# mDNS: <hostname>.local on the LAN, addresses only (NET_MDNS, docs/OS.md §9).
+if [ "${NET_MDNS}" = on ]; then
+    systemctl enable avahi-daemon.service avahi-daemon.socket
+else
+    systemctl disable avahi-daemon.service avahi-daemon.socket >/dev/null 2>&1 || true
+fi
+rm -f /etc/avahi/services/*.service
 if [ -f /usr/lib/systemd/system/unlook-stream.service ]; then systemctl enable unlook-stream.service; fi
 if [ "${USB_GADGET}" = 1 ]; then systemctl enable unlook-usb-gadget.service; else systemctl disable unlook-usb-gadget.service || true; fi
 systemctl disable ssh.service ssh.socket >/dev/null 2>&1 || true

@@ -80,6 +80,17 @@ conf_validate() {
     require_match USB_GADGET "$USB_GADGET" '0|1'
     require_match USB_GADGET_ADDRESS "$USB_GADGET_ADDRESS" '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}'
     for _p in $FW_TCP_PORTS; do require_uint FW_TCP_PORTS "$_p" 1 65535; done
+    require_match SSH_DEFAULT "$SSH_DEFAULT" 'on|off'
+    require_match NET_AP_IFACE "$NET_AP_IFACE" '[A-Za-z0-9_.-]{1,15}'
+    require_match NET_AP_ADDRESS "$NET_AP_ADDRESS" '([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}'
+    [ "${NET_AP_ADDRESS%/*}" != "${USB_GADGET_ADDRESS%/*}" ] || die "NET_AP_ADDRESS and USB_GADGET_ADDRESS must differ"
+    require_uint NET_SETUP_PORT "$NET_SETUP_PORT" 1 65535
+    for _p in $FW_TCP_PORTS 22 53; do
+        [ "$NET_SETUP_PORT" != "$_p" ] || die "NET_SETUP_PORT collides with port $_p"
+    done
+    require_uint NET_LAN_FALLBACK_S "$NET_LAN_FALLBACK_S" 30 3600
+    require_match NET_MDNS "$NET_MDNS" 'on|off'
+    require_match NET_CREDENTIALS_FILE "$NET_CREDENTIALS_FILE" 'on|off'
     require_uint PART_CFG_MB "$PART_CFG_MB" 33 256
     require_uint PART_BOOT_MB "$PART_BOOT_MB" 128 1024
     require_uint PART_ROOT_MB "$PART_ROOT_MB" 1536 16384

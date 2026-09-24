@@ -1,0 +1,12 @@
+[Unit]
+Description=Unlook Wi-Fi fallback (hotspot back when the saved Wi-Fi does not connect)
+Documentation=file:/usr/share/doc/unlook-os/OS.md
+RequiresMountsFor=/etc/unlook
+After=unlook-wifi.service unlook-stream.service
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/unlook-wifi watch
+
+[Install]
+WantedBy=multi-user.target

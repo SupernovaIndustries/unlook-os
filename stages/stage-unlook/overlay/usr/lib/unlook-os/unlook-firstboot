@@ -9,6 +9,9 @@
 #   3. per-unit audit key (32 random bytes, 0400) for the SDK AuditLogger
 #   4. unit id + pairing secret (unlook_stream --pairing-code --machine); the pairing
 #      code is written ONCE to the journal for the production label
+#   5. SSH on (SSH_DEFAULT=on): unless Raspberry Pi Imager set the login, a random
+#      per-unit password for the admin (never shared between units; shown on the
+#      setup page and in unlook-credentials). Owner decision: docs/OS.md §9.
 set -eu
 UOS_TAG=unlook-firstboot
 # shellcheck source=common.sh
@@ -45,6 +48,7 @@ install -d -m 0750 "$UOS_STATE"
 # ---- 2. production profile --------------------------------------------------------
 SRC="$SEED/scanner_profile.yaml"
 if [ -e "$SRC" ]; then
+    # shellcheck disable=SC2094 # both sides of the NUL check only read $SRC
     if [ -L "$SRC" ] || [ ! -f "$SRC" ]; then
         uos_log err "seed profile is not a regular file: ignored"
     elif [ "$(stat -c %s "$SRC")" -gt "$PROFILE_MAX" ]; then
@@ -102,6 +106,40 @@ if [ -n "$code" ]; then
     # Owner requirement: shown once in the journal for the production label.
     # The code IS the pairing credential; the journal is root/adm-only.
     logger -t unlook-firstboot -p auth.notice -- "pairing code for $unit: $code"
+fi
+
+# ---- 5. SSH on, per-unit admin password ---------------------------------------------
+if [ "$(uos_conf SSH_DEFAULT on 'on|off')" = on ]; then
+    CRED="$ETC/credentials"
+    install -d -m 0700 "$CRED"
+    install -d -m 0755 "$ETC/ssh/sshd.d"
+    user="$(getent passwd 1000 | cut -d: -f1)"
+    # Imager's choice wins: its keys, or its password (then also for SSH).
+    if [ -n "$user" ] && [ -s "$ETC/ssh/authorized_keys.d/$user" ]; then
+        uos_log notice "SSH keys set by Raspberry Pi Imager: no generated password"
+    elif [ -s "$ETC/imager/password-hash" ]; then
+        printf 'PasswordAuthentication yes\nAuthenticationMethods any\n' > "$ETC/ssh/sshd.d/10-password.conf"
+        chmod 0644 "$ETC/ssh/sshd.d/10-password.conf"
+        uos_log notice "SSH with the password set in Raspberry Pi Imager: no generated password"
+    elif [ ! -s "$CRED/admin-password-hash" ]; then
+        # 16 characters from 56 unambiguous symbols (~93 bits), grouped by 4.
+        pw="$(tr -dc 'ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnpqrstuvwxyz23456789' < /dev/urandom | head -c 16)"
+        [ "${#pw}" -eq 16 ] || uos_die "could not generate the admin password"
+        pw="$(printf '%s' "$pw" | sed 's/\(....\)\(....\)\(....\)\(....\)/\1-\2-\3-\4/')"
+        hash="$(printf '%s' "$pw" | openssl passwd -6 -stdin)"
+        # shellcheck disable=SC2016 # a literal '$' in the regex
+        printf '%s' "$hash" | grep -Eq '^\$6\$[./A-Za-z0-9]{1,16}\$[./A-Za-z0-9]{86}$' || uos_die "could not hash the admin password"
+        printf '%s\n' "$pw" > "$CRED/admin-password.new"
+        printf '%s\n' "$hash" > "$CRED/admin-password-hash.new"
+        chmod 0600 "$CRED/admin-password.new" "$CRED/admin-password-hash.new"
+        mv -f "$CRED/admin-password-hash.new" "$CRED/admin-password-hash"
+        mv -f "$CRED/admin-password.new" "$CRED/admin-password"
+        printf 'PasswordAuthentication yes\nAuthenticationMethods any\n' > "$ETC/ssh/sshd.d/10-password.conf"
+        chmod 0644 "$ETC/ssh/sshd.d/10-password.conf"
+        uos_log notice "per-unit admin password generated (unlook-credentials shows it)"
+    fi
+    : > "$ETC/ssh/enabled"
+    uos_log notice "SSH on by default (SSH_DEFAULT=on)"
 fi
 
 date -u +%Y-%m-%dT%H:%M:%SZ > "$MARK"

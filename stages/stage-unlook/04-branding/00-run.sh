@@ -2,7 +2,7 @@
 # Supernova / Unlook boot splash (Plymouth). Installed only when branding/assets/
 # holds the artwork (branding/README.md); otherwise the image boots with a plain
 # console and nothing here runs.
-# shellcheck source=../lib.sh
+# shellcheck source=../../../scripts/lib.sh
 . "${STAGE_DIR}/lib.sh"
 conf_load "${STAGE_DIR}/unlook-os.conf"
 
@@ -11,10 +11,9 @@ if [ "${BRANDING}" != auto ] || [ ! -f "$A/background.png" ]; then
     log "branding: no branding/assets/background.png -- splash not installed"
     exit 0
 fi
-for f in "$A/background.png"; do
-    [ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ] || die "branding: $f is not a PNG"
-    [ "$(stat -c %s "$f")" -le 8388608 ] || die "branding: $f larger than 8 MiB"
-done
+f="$A/background.png"
+[ "$(head -c 8 "$f" | od -An -tx1 | tr -d ' \n')" = 89504e470d0a1a0a ] || die "branding: $f is not a PNG"
+[ "$(stat -c %s "$f")" -le 8388608 ] || die "branding: $f larger than 8 MiB"
 
 T="${ROOTFS_DIR}/usr/share/plymouth/themes/unlook"
 on_chroot << 'EOF'

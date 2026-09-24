@@ -124,7 +124,11 @@ production if in doubt.
    and `UNLOOK_AUDIT_KEY_FILE` from its drop-in;
 4. derives the unit id (`UNLK-` + last 6 hex digits of the board serial) and
    the pairing secret via `unlook_stream --pairing-code --machine`, stores the unit id
-   in `/etc/unlook/unit-id` and writes the pairing code **once** to the journal.
+   in `/etc/unlook/unit-id` and writes the pairing code **once** to the journal;
+5. with `SSH_DEFAULT=on`: turns SSH on and, unless Raspberry Pi Imager set the
+   login (its password or its keys), generates a **per-unit** admin password
+   (16 characters from 56 unambiguous symbols, ~93 bits, `xxxx-xxxx-xxxx-xxxx`)
+   in `/etc/unlook/credentials/` (plain + SHA-512 crypt, 0600).
 
 `unlook-identity.service` then sets the hostname to the unit id on every boot,
 before the network comes up. Read the code for the label:
@@ -133,7 +137,7 @@ before the network comes up. Read the code for the label:
 journalctl -t unlook-firstboot -g "pairing code"        # UNLOOK1:UNLK-1A2B3C:…
 ```
 
-What runs afterwards: NetworkManager (hotspot on demand, driven by the SDK),
+What runs afterwards: NetworkManager (hotspot driven by the SDK, §5.1),
 BlueZ in LE-only mode, `unlook-usb-gadget` (CDC-ACM `/dev/ttyGS0` + ECM `usb0`
 at `10.43.0.1`, DHCP for the host), `unlook-stream` (5555 stream, 5556 UCP),
 `nftables`, persistent `journald`, `unlook-health`.
@@ -146,6 +150,63 @@ pairing code (label/QR), asks for the hotspot, receives the Wi-Fi credentials
 and connects to the stream protocol (docs/PROVISIONING.md in the SDK). The
 OS drop-in never lets a first-boot failure keep the daemon down (`Wants=`),
 and `StartLimitIntervalSec=0` keeps restarting it for as long as it exits.
+
+### 5.1 Network onboarding (hotspot, setup page, SSH, mDNS)
+
+Owner decision 2026-09-24 (§9). The hotspot is always the SDK daemon's
+(`unlook-ap`, SSID `Unlook-<id>`, WPA2, per-unit random password,
+`NET_AP_ADDRESS` = `10.42.0.1` on every unit); the OS only chooses the mode
+the daemon starts in, through `/run/unlook/net.env` (read before
+`/etc/unlook/stream.env`, so an operator override still wins):
+
+| State | `net_mode` | What the unit does |
+|---|---|---|
+| no Wi-Fi saved (fresh unit) | `ap` | hotspot always on: setup page, SSH, phone app |
+| Wi-Fi saved (setup page, Imager, `unlook-wifi set`) | `ble` | joins the Wi-Fi; the app can still raise the hotspot over BLE (single radio: the Wi-Fi drops while the phone uses the hotspot and comes back after `hotspot_idle_timeout_s`) |
+| Wi-Fi saved but not connected after `NET_LAN_FALLBACK_S` | `ap` | hotspot back, saved networks kept (retried at the next boot) |
+
+- `unlook-wifi.service` (before `unlook-stream`) scans while the radio is
+  still free and writes the mode; `unlook-wifi-watch.service` does the
+  fallback (and restarts the daemon once if the hotspot did not come up —
+  the SDK does not retry a failed bring-up).
+- **Setup page**: `http://10.42.0.1/` (`unlook-setup.socket`, `FreeBind`, the
+  hotspot address only; nftables: only from `NET_AP_IFACE` to that address).
+  It lists the networks from the boot scan (or a typed name), shows the SSH
+  login and the per-unit password, and hands the choice to
+  `unlook-wifi set` (SSID + password on stdin). The switch runs in a
+  transient unit: the page answers first, then the hotspot goes, the unit
+  joins the Wi-Fi; on failure the previous network (or the hotspot) comes
+  back and the page shows the error. The page process has no capability,
+  `ProtectSystem=strict`, writes only `/etc/unlook/network`, NetworkManager's
+  connection directory and `/run/unlook`; Host header pinned to the address
+  (DNS rebinding), per-process CSRF token, Origin check, 4 KiB bodies.
+- **Saved networks** live in `/etc/unlook/network/` (data partition; the
+  one from the page is `unlook-wifi.nmconnection`, SSID stored as bytes) and
+  are restored into NetworkManager by `unlook-identity` at every boot, so they
+  survive OS updates. `unlook-wifi forget` drops them all.
+- **SSH** is on from the first boot (§5 step 5): `ssh unlook-admin@10.42.0.1`
+  on the hotspot, `ssh unlook-admin@<hostname>.local` on the LAN.
+  `sudo unlook-ssh passwd` changes the password; the first-boot one is then
+  deleted and no longer shown.
+- **mDNS** (`NET_MDNS=on`): avahi answers `<hostname>.local` (IPv4 address
+  records only; no services, host info or browsing; not on `usb0`).
+- **Credentials** (`unlook-credentials`): unit id, hotspot SSID + password,
+  SSH user + password (while unchanged), pairing code. With
+  `NET_CREDENTIALS_FILE=on` also written after every boot to the `UNLOOKCFG`
+  partition (`unlook-credenziali.txt`, `unlook-qr-wifi.png`,
+  `unlook-qr-pairing.png`) — readable from a PC, like a label.
+
+| Knob (`config/unlook-os.conf`) | Default | |
+|---|---|---|
+| `SSH_DEFAULT` | `on` | SSH + per-unit password at first boot |
+| `NET_AP_IFACE` / `NET_AP_ADDRESS` | `wlan0` / `10.42.0.1/24` | passed to the daemon (`UNLOOK_AP_*`) |
+| `NET_SETUP_PORT` | `80` | setup page |
+| `NET_LAN_FALLBACK_S` | `120` | Wi-Fi → hotspot fallback |
+| `NET_MDNS` | `on` | `<hostname>.local` |
+| `NET_CREDENTIALS_FILE` | `on` | credentials on `UNLOOKCFG` (turn off for customers who get a label) |
+
+The runtime copies live in `/etc/unlook-os/os.conf`; per unit they can be
+overridden in `/etc/unlook/os.conf`.
 
 ## 6. Updates
 
@@ -258,15 +319,18 @@ reinstalled with `dpkg -i`, status `rolled_back:health_timeout`.
    `UNLOOKBOOT`, visible on Windows/macOS after flashing):
    ```
    unlook/scanner_profile.yaml     # validated at first boot; e.g. net_mode, gpio, baseline
-   unlook/authorized_keys          # optional: service keys for unlook-admin (SSH stays off)
-   unlook/ssh                      # optional, empty: enable SSH at first boot
+   unlook/authorized_keys          # optional: service keys for unlook-admin
+   unlook/ssh                      # optional, empty: enable SSH (already on with SSH_DEFAULT=on)
    unlook/sdk-deploy-key           # GitHub read-only deploy key of unlook-sdk (SDK updates)
    ```
    `authorized_keys` and `ssh` are consumed (deleted) at boot; the profile
    seed stays so a factory reset re-applies it.
-3. First power-on in the factory: wait for `unlook-health` (≈ 1 min), read the
-   pairing code (`journalctl -t unlook-firstboot`, or `unlook_stream --pairing-code`
-   over the UART console) and print the QR label (`qrencode -o label.png "<code>"`).
+3. First power-on in the factory: wait for `unlook-health` (≈ 1 min), then
+   print the label from `UNLOOKCFG/unlook-credenziali.txt` and the two QR codes
+   next to it (hotspot `WIFI:` code and pairing code) — or `sudo
+   unlook-credentials` over SSH / the USB-C link. Units for customers:
+   build with `NET_CREDENTIALS_FILE=off`, or delete the three files after
+   printing.
 4. Calibrate (`calibrate` as root with `HOME=/var/lib/unlook`, or from the app);
    calibration files land on the data partition.
 5. Record unit id ↔ serial ↔ OS version (`/etc/unlook-os-release`) in the
@@ -307,12 +371,32 @@ reinstalled with `dpkg -i`, status `rolled_back:health_timeout`.
 - **Network exposure**: nftables `inet unlook`, input policy drop. Open: TCP
   `FW_TCP_PORTS` (5555 stream, 5556 UCP), DHCP/DNS served by NetworkManager's
   shared mode to hotspot / USB-C clients (UDP 67, 53 / TCP 53 — dnsmasq binds
-  only the shared interfaces), ICMP, and TCP 22 only while SSH is enabled.
-  Forwarding: dropped. BLE is not IP. Removed: avahi, rpi-connect, userconf,
+  only the shared interfaces), ICMP, TCP 22 while SSH is enabled (on from the
+  first boot with `SSH_DEFAULT=on`), TCP `NET_SETUP_PORT` only from
+  `NET_AP_IFACE` to the hotspot address, UDP 5353 with `NET_MDNS=on`.
+  Forwarding: dropped. BLE is not IP. Removed: rpi-connect, userconf,
   modemmanager, swap; apt timers disabled; NetworkManager connectivity probes off.
-- **SSH**: off by default. `sudo unlook-ssh add-key <file>` then
-  `sudo unlook-ssh enable` (or the boot-partition seed, §8). Key-only, only
-  `unlook-admin`, host key on the data partition. `unlook-ssh disable` closes it.
+- **SSH**: on from the first boot when built with `SSH_DEFAULT=on` (default,
+  §5.1), otherwise off. Password login with the **per-unit** password (or the
+  one set in Imager / with `unlook-ssh passwd`), keys with `unlook-ssh add-key`;
+  only the uid-1000 admin (`unlook-admin`), host key on the data partition,
+  `MaxAuthTries 3`, no root, no forwarding. `unlook-ssh disable` closes it.
+- **First-boot network onboarding** (owner decision, 2026-09-24): SSH on by
+  default with a per-unit admin password; a fresh unit keeps the SDK hotspot
+  up (`net_mode ap`) with a setup page on `http://10.42.0.1/` to choose the
+  Wi-Fi; `<hostname>.local` over mDNS; the credentials also on the `UNLOOKCFG`
+  partition. Conformity (EN 18031-1, ETSI EN 303 645 §5.1, CRA Annex I): **no
+  credential is shared between units** — the hotspot password, SSH password
+  and pairing secret are all random per unit, and a universal default
+  password is not an option of the build. Trust: joining the hotspot needs
+  its per-unit WPA2 password (label, credentials file, or the app after BLE
+  pairing), i.e. physical access or an already-paired phone; whoever is on
+  the hotspot may read the SSH password on the setup page (the same person
+  holding the label). Mitigations: page on the hotspot address/interface
+  only, no capability, CSRF/Host/Origin checks, strict input validation,
+  secrets on stdin; the password disappears from the page and the file once
+  changed; `NET_CREDENTIALS_FILE=off` for units shipped with a printed label.
+  mDNS publishes addresses only.
 - **Raspberry Pi Imager customisation** (owner decision, 2026-09-23): images
   are published with an Imager catalogue (`deploy/unlook-os.json`,
   `init_format: systemd`) so Imager can set user + password, SSH (keys **or
@@ -333,17 +417,19 @@ reinstalled with `dpkg -i`, status `rolled_back:health_timeout`.
   `/var/lib/unlook-ota`, ownership of `audit.key` (`unlook-perms`,
   `ExecStartPre=+`). Switching is a config change once the SDK has been
   verified on the Pi as that user (docs/SDK_CHANGES.md open item 2).
-- **Accounts**: `root` and `unlook-admin` passwords are locked; console login
-  is therefore impossible — the debug UART is a boot log, not a shell.
-  `unlook-admin` has passwordless sudo (key-only access). `unlook` is the
-  service user prepared for the daemon's least-privilege migration.
+- **Accounts**: `root` is locked. `unlook-admin` is locked in the image; at
+  first boot it gets the per-unit password (or Imager's) — SSH only, the
+  image has no console login (the debug UART is a boot log, not a shell).
+  `unlook-admin` has passwordless sudo. `unlook` is the service user prepared
+  for the daemon's least-privilege migration.
 - **Logs**: persistent journal on `/data` (256 MiB cap, 6 months, compressed);
   SDK audit trail (HMAC-chained) with a per-unit key.
 - **Known trade-offs** (owner decisions): the pairing code is written once to
   the journal (root/adm-readable only) as requested; `ota_apply` over UCP has
   no authentication of its own — it can only install content signed by the
-  company, and UCP is reachable only on the WPA2 hotspot handed out after BLE
-  pairing, on USB-C or on a LAN the customer controls; the audit key sits on
+  company, and UCP is reachable only on the per-unit WPA2 hotspot (password
+  from the label/credentials file or handed out after BLE pairing), on USB-C
+  or on a LAN the customer controls; the audit key sits on
   the same medium as the log (tamper-evident against edits, not against an
   attacker with root).
 - **Time**: TLS and certificate validity need a sane clock. The CM5 RTC keeps

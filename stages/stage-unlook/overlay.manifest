@@ -10,6 +10,15 @@
 0755 - /usr/sbin/unlook-health
 0755 - /usr/sbin/unlook-ota
 0755 t /usr/sbin/unlook-ssh
+0755 - /usr/sbin/unlook-wifi
+0755 t /usr/sbin/unlook-credentials
+0755 - /usr/lib/unlook-os/setup-page.py
+0644 - /usr/lib/systemd/system/unlook-wifi.service
+0644 - /usr/lib/systemd/system/unlook-wifi-watch.service
+0644 t /usr/lib/systemd/system/unlook-setup.socket
+0644 t /usr/lib/systemd/system/unlook-setup.service
+0644 - /usr/lib/systemd/system/unlook-credentials.service
+0644 - /etc/avahi/avahi-daemon.conf
 0644 - /usr/lib/systemd/system/unlook-firstboot.service
 0644 - /usr/lib/systemd/system/unlook-identity.service
 0644 - /usr/lib/systemd/system/unlook-health.service
@@ -17,7 +26,7 @@
 0644 - /usr/lib/systemd/system/unlook-ota-apply@.service
 0644 - /usr/lib/systemd/system/unlook-ssh.service
 0644 t /usr/lib/systemd/system/unlook-stream.service.d/10-unlook-os.conf
-0644 - /usr/lib/systemd/system-preset/10-unlook.preset
+0644 t /usr/lib/systemd/system-preset/10-unlook.preset
 0644 - /usr/lib/tmpfiles.d/unlook-os.conf
 0644 - /etc/systemd/journald.conf.d/50-unlook.conf
 0644 - /etc/systemd/system.conf.d/50-unlook-watchdog.conf

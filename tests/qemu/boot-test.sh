@@ -40,20 +40,29 @@ u="$(cat /etc/unlook/unit-id 2>/dev/null)"; [ -n "$u" ] && [ "$(hostname)" = "$u
 for m in /data /etc/unlook /var/lib/unlook /var/log/journal /var/lib/bluetooth; do findmnt "$m" >/dev/null || f "mount:$m"; done
 [ -d "/var/log/journal/$(cat /etc/machine-id)" ] || f journal_persistent
 nft list chain inet unlook input 2>/dev/null | grep -q 'policy drop' || f firewall
+# SSH (SSH_DEFAULT=on) and the setup page on the hotspot address are expected;
+# mDNS (5353) when NET_MDNS=on. Nothing else listens.
 for p in $(ss -Htln | awk '{print $4}' | sed 's/.*://' | sort -u); do
-    case " @PORTS@ 53 " in *" $p "*) ;; *) f "tcp_listen:$p" ;; esac
+    case " @PORTS@ 53 22 @SETUP_PORT@ " in *" $p "*) ;; *) f "tcp_listen:$p" ;; esac
 done
 for p in $(ss -Hutln | awk '$1=="udp"{print $5}' | sed 's/.*://' | sort -u); do
-    case " 53 67 68 546 " in *" $p "*) ;; *) f "udp_listen:$p" ;; esac
+    case " 53 67 68 546 5353 " in *" $p "*) ;; *) f "udp_listen:$p" ;; esac
 done
-systemctl is-active --quiet ssh.service && f ssh_running
+for a in $(ss -Htln '( sport = :@SETUP_PORT@ )' | awk '{print $4}'); do
+    case "$a" in "@AP_IP@:"* | "@AP_IP@%"*) ;; *) f "setup_listen:$a" ;; esac
+done
+systemctl is-active --quiet ssh.service || f ssh_not_running
+[ "$(stat -c %a /etc/unlook/credentials/admin-password 2>/dev/null)" = 600 ] || f admin_password
+grep -qx 'UNLOOK_NET_MODE=ap' /run/unlook/net.env || f net_mode_ap
+systemctl is-active --quiet unlook-setup.socket || f setup_socket
 unlook-ota status --machine | grep -q '^ota_status:' || f ota_status
 rauc status --output-format=shell >/dev/null 2>&1 || f rauc_status
 [ "$(/usr/lib/unlook-os/rauc-tryboot-backend get-primary)" = A ] || f backend_primary
 if [ -z "$fails" ]; then echo "UNLOOK-QEMU-RESULT: PASS"; else echo "UNLOOK-QEMU-RESULT: FAIL $fails"; fi > /dev/ttyAMA0
 systemctl poweroff
 EOF
-sed -i "s/@PORTS@/$FW_TCP_PORTS/" "$Q/extra/usr/lib/unlook-os/qemu-check"
+sed -i -e "s/@PORTS@/$FW_TCP_PORTS/" -e "s/@SETUP_PORT@/$NET_SETUP_PORT/g" -e "s|@AP_IP@|${NET_AP_ADDRESS%/*}|g" \
+    "$Q/extra/usr/lib/unlook-os/qemu-check"
 chmod 0755 "$Q/extra/usr/lib/unlook-os/qemu-check"
 cat > "$Q/extra/etc/systemd/system/unlook-qemu-check.service" << 'EOF'
 [Unit]

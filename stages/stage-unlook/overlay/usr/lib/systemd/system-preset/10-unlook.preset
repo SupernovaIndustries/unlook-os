@@ -6,6 +6,10 @@ enable unlook-identity.service
 enable unlook-health.service
 enable unlook-tryboot-guard.service
 enable unlook-ssh.service
+enable unlook-wifi.service
+enable unlook-wifi-watch.service
+enable unlook-setup.socket
+enable unlook-credentials.service
 enable unlook-stream.service
 enable unlook-usb-gadget.service
 enable nftables.service
@@ -15,8 +19,8 @@ disable ssh.service
 disable ssh.socket
 disable sshswitch.service
 disable regenerate_ssh_host_keys.service
-disable avahi-daemon.service
-disable avahi-daemon.socket
+@NET_MDNS_PRESET@ avahi-daemon.service
+@NET_MDNS_PRESET@ avahi-daemon.socket
 disable userconfig.service
 disable apt-daily.timer
 disable apt-daily-upgrade.timer

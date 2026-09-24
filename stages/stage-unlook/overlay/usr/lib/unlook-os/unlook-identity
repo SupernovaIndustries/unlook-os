@@ -2,7 +2,8 @@
 # unlook-identity -- every boot, before the network: make this slot carry the
 # unit's identity and the local settings kept on the data partition, so both
 # A/B slots and every OS update look the same:
-#   * login user (name, password hash) + SSH keys set through Raspberry Pi Imager
+#   * login user (name, password hash) + SSH keys set through Raspberry Pi Imager,
+#     or the per-unit admin password made at first boot / set with `unlook-ssh passwd`
 #   * Wi-Fi client connections set through Imager
 #   * timezone, keyboard
 #   * hostname: Imager's if one was set, else the unit id (UNLK-xxxxxx)
@@ -29,10 +30,14 @@ if [ -n "$want" ] && printf '%s' "$want" | grep -Eq "$NAME_RE"; then
         done
         uos_log notice "login user $cur renamed to $want"
     fi
-    hash="$(sed -n '1p' "$SAVE/password-hash" 2>/dev/null || true)"
-    if [ -n "$hash" ] && printf '%s' "$hash" | grep -Eq '^\$[0-9a-z]+\$[./A-Za-z0-9$=,-]{16,256}$'; then
-        [ "$(getent shadow "$want" | cut -d: -f2)" = "$hash" ] || usermod -p "$hash" "$want"
-    fi
+fi
+# Password: the unit's own (first boot / unlook-ssh passwd) wins over Imager's;
+# unlook-imager drops the unit's own when Imager sets a new one.
+user="$(getent passwd 1000 | cut -d: -f1)"
+hash="$(sed -n '1p' "$ETC/credentials/admin-password-hash" 2>/dev/null || true)"
+[ -n "$hash" ] || hash="$(sed -n '1p' "$SAVE/password-hash" 2>/dev/null || true)"
+if [ -n "$user" ] && [ -n "$hash" ] && printf '%s' "$hash" | grep -Eq '^\$[0-9a-z]+\$[./A-Za-z0-9$=,-]{16,256}$'; then
+    [ "$(getent shadow "$user" | cut -d: -f2)" = "$hash" ] || usermod -p "$hash" "$user"
 fi
 
 # ---- Wi-Fi connections ---------------------------------------------------------------

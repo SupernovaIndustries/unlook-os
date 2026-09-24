@@ -120,7 +120,7 @@ KEYRING_KIND=$KEYRING_KIND
 SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH
 EOF
     # Every override has to reach the stage scripts: re-emit the effective config.
-    env | grep -E '^(IMG_NAME|UNLOOK_|RAUC_|PIGEN_|CAMERA_|MIRA220_|LIBCAMERA_|I2C_|UART_|USB_|EXTRA_|FW_|PART_|HEALTH_|TRYBOOT_|SDK_|ADMIN_|SERVICE_|BRANDING|WPA_|TIMEZONE_|LOCALE_|KEYBOARD_)' |
+    env | grep -E '^(IMG_NAME|UNLOOK_|RAUC_|PIGEN_|CAMERA_|MIRA220_|LIBCAMERA_|I2C_|UART_|USB_|EXTRA_|FW_|PART_|HEALTH_|TRYBOOT_|SDK_|ADMIN_|SERVICE_|BRANDING|WPA_|SSH_|NET_|TIMEZONE_|LOCALE_|KEYBOARD_)' |
         sed 's/^\([A-Z0-9_]*\)=\(.*\)$/\1="\2"/' > "$STAGE/unlook-os.conf"
     mkdir -p "$STAGE/01-camera/files/debs" "$STAGE/02-sdk/files/debs" "$STAGE/02-sdk/files/keys" "$STAGE/03-system/files"
     cp -R "$TOP/overlays" "$STAGE/01-camera/files/unlook-overlays"
